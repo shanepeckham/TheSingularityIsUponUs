@@ -37,6 +37,9 @@ class CopilotConfig:
     timeout: int = 300
     """Timeout in seconds for Copilot operations."""
     
+    model: Optional[str] = None
+    """Model to use (e.g., 'gpt-4o', 'claude-3.5-sonnet'). None uses default."""
+    
     fallback_to_cli: bool = True
     """Whether to fall back to Copilot CLI if SDK fails."""
     

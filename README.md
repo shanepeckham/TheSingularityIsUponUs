@@ -71,6 +71,9 @@ uv run python -m release_flow --continuous -i 5 --auto-merge
 
 # Single improvement with inline prompt
 uv run python -m release_flow --prompt "Add error handling" --auto-merge
+
+# Use a specific model
+uv run python -m release_flow --continuous --model claude-3.5-sonnet --auto-merge
 ```
 
 #### Python API
@@ -134,6 +137,7 @@ config = ReleaseFlowConfig(
     
     copilot=CopilotConfig(
         timeout=300,
+        model="gpt-4o",  # or "claude-3.5-sonnet", None for default
         fallback_to_cli=True,
         cli_command="copilot",
     ),
@@ -182,14 +186,13 @@ config = ReleaseFlowConfig(
 ## CLI Options
 
 ```
-usage: release_flow [-h] --repo REPO (--prompt PROMPT | --continuous)
-                    [--auto-merge] [--iterations N] [--delay SECONDS]
-                    [--path PATH] [--prompts-file FILE] [--main-branch BRANCH]
-                    [--no-wait-ci] [--merge-method METHOD] [--timeout SECONDS]
+usage: release_flow [-h] [--prompt PROMPT | --continuous] [--auto-merge]
+                    [--iterations N] [--delay SECONDS] [--path PATH]
+                    [--prompts-file FILE] [--main-branch BRANCH] [--no-wait-ci]
+                    [--merge-method METHOD] [--timeout SECONDS] [--model MODEL]
                     [--stop-on-failure]
 
 Options:
-  --repo, -r         Target repository (owner/name)
   --prompt, -p       Single improvement prompt
   --continuous, -c   Run in continuous mode
   --auto-merge, -m   Auto-merge PRs after CI passes
@@ -201,13 +204,13 @@ Options:
   --no-wait-ci       Skip CI check waiting
   --merge-method     Merge method: merge, squash, rebase (default: squash)
   --timeout          Copilot timeout in seconds (default: 300)
+  --model            Copilot model (e.g., 'gpt-4o', 'claude-3.5-sonnet')
   --stop-on-failure  Stop if an iteration fails
-```
 
-## Custom Prompts File
-
-Create a file with one prompt per line:
-
+Environment Variables:
+  GITHUB_TOKEN       GitHub personal access token (or use 'gh auth login')
+  GITHUB_REPO_OWNER  Repository owner (e.g., 'microsoft')
+  GITHUB_REPO_NAME   Repository name (e.g., 'vscode')
 ```text
 # prompts.txt
 # Lines starting with # are ignored
@@ -222,7 +225,7 @@ Update deprecated dependencies
 Use with:
 
 ```bash
-python -m release_flow --repo owner/repo --prompts-file prompts.txt --continuous
+uv run python -m release_flow --prompts-file prompts.txt --continuous
 ```
 
 ## Workflow
@@ -273,12 +276,14 @@ jobs:
       - name: Run Release Flow
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO_NAME: ${{ github.event.repository.name }}
         run: |
           if [ -n "${{ github.event.inputs.prompt }}" ]; then
-            python -m release_flow --repo ${{ github.repository }} \
+            python -m release_flow \
               --prompt "${{ github.event.inputs.prompt }}" --auto-merge
           else
-            python -m release_flow --repo ${{ github.repository }} \
+            python -m release_flow \
               --continuous --iterations 1 --auto-merge
           fi
 ```
