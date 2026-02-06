@@ -132,6 +132,13 @@ Environment Variables:
     )
     
     parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Copilot model to use (e.g., 'gpt-4o', 'claude-3.5-sonnet')",
+    )
+    
+    parser.add_argument(
         "--stop-on-failure",
         action="store_true",
         help="Stop continuous mode if an iteration fails",
@@ -271,6 +278,7 @@ def main():
         ),
         copilot=CopilotConfig(
             timeout=args.timeout,
+            model=args.model,
         ),
         pr=PRConfig(
             merge_method=args.merge_method,

@@ -490,7 +490,9 @@ class ReleaseFlow:
         """
         # Sanitize prompt to prevent injection
         prompt = _sanitize_input(prompt, max_length=2000)
-        print(f"\n🤖 Evaluating codebase with prompt:\n   '{prompt[:100]}{'...' if len(prompt) > 100 else ''}'")
+        model_info = f" (model: {self.config.copilot.model})" if self.config.copilot.model else ""
+        print(f"\n🤖 Evaluating codebase with Copilot{model_info}...")
+        print(f"   Prompt: '{prompt[:100]}{'...' if len(prompt) > 100 else ''}'")
         
         full_prompt = f"""
 You are analyzing and improving the codebase at {self.local_path}.
@@ -513,9 +515,13 @@ After making changes, provide a summary of:
 """
         
         try:
-            session = await self.copilot_client.create_session({
+            session_config = {
                 "working_directory": str(self.local_path),
-            })
+            }
+            if self.config.copilot.model:
+                session_config["model"] = self.config.copilot.model
+            
+            session = await self.copilot_client.create_session(session_config)
             
             response = await session.send_and_wait(
                 {"prompt": full_prompt},
