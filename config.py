@@ -7,7 +7,7 @@ making it easy to customize for different projects.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Dict, Any
 
 
 @dataclass
@@ -115,7 +115,7 @@ class ReleaseFlowConfig:
     """GitHub personal access token. Falls back to gh CLI if not set."""
     
     # Prompts for improvements
-    prompts: list[str] = field(default_factory=list)
+    prompts: List[str] = field(default_factory=list)
     """List of prompts during continuous mode."""
     
     # Sub-configurations
@@ -135,7 +135,7 @@ class ReleaseFlowConfig:
     on_iteration_start: Optional[Callable[[int, str], None]] = None
     """Callback called at the start of each iteration: (iteration, prompt)."""
     
-    on_iteration_end: Optional[Callable[[int, dict], None]] = None
+    on_iteration_end: Optional[Callable[[int, Dict[str, Any]], None]] = None
     """Callback called at the end of each iteration: (iteration, result)."""
     
     on_pr_created: Optional[Callable[[int, str], None]] = None
@@ -144,14 +144,29 @@ class ReleaseFlowConfig:
     on_error: Optional[Callable[[Exception], bool]] = None
     """Callback on error. Return True to continue, False to stop."""
     
-    def __post_init__(self):
-        """Validate configuration after initialization."""
+    def __post_init__(self) -> None:
+        """
+        Validate configuration after initialization.
+        
+        Raises:
+            ValueError: If configuration is invalid.
+        """
         if isinstance(self.local_path, str):
             self.local_path = Path(self.local_path)
+        
+        if not self.repo:
+            raise ValueError("Repository name is required in 'owner/name' format")
+        
+        if "/" not in self.repo:
+            raise ValueError(f"Invalid repo format: '{self.repo}'. Expected 'owner/name'")
+        
+        if self.pr.merge_method not in ("merge", "squash", "rebase"):
+            raise ValueError(f"Invalid merge_method: '{self.pr.merge_method}'. "
+                           "Must be 'merge', 'squash', or 'rebase'")
 
 
 # Default prompts for code improvement
-DEFAULT_PROMPTS = [
+DEFAULT_PROMPTS: List[str] = [
     "Review this codebase for security vulnerabilities and implement fixes",
     "Identify code quality issues and refactor for better maintainability",
     "Add comprehensive error handling where missing",

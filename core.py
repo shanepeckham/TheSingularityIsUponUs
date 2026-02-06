@@ -6,13 +6,30 @@ the automated release process using GitHub Copilot SDK.
 """
 
 import asyncio
+import logging
 import os
 import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Constants
+DEFAULT_CHECK_INTERVAL = 30
+INITIAL_CHECK_DELAY = 10
+MAX_PR_BODY_LENGTH = 2000
+MAX_COMMIT_MSG_FILES = 20
+MAX_BRANCH_SUFFIX_LENGTH = 30
+MAX_PROMPT_LENGTH_COMMIT = 50
+MAX_PROMPT_LENGTH_PR = 60
 
 # Lazy imports for optional dependencies
 Github = None
@@ -133,31 +150,64 @@ class ReleaseFlow:
             config.prompts = DEFAULT_PROMPTS.copy()
     
     def _get_gh_token(self) -> Optional[str]:
-        """Try to get GitHub token from gh CLI."""
+        """
+        Try to get GitHub token from gh CLI.
+        
+        Returns:
+            The GitHub token if available, None otherwise.
+        """
         try:
             result = subprocess.run(
                 ["gh", "auth", "token"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=10
             )
-            return result.stdout.strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
+            token = result.stdout.strip()
+            if token:
+                logger.debug("Successfully retrieved token from gh CLI")
+            return token
+        except subprocess.TimeoutExpired:
+            logger.warning("gh CLI timed out")
+            return None
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.debug(f"Could not get token from gh CLI: {e}")
             return None
     
-    async def initialize_copilot(self):
-        """Initialize the Copilot SDK client."""
+    async def initialize_copilot(self) -> None:
+        """
+        Initialize the Copilot SDK client.
+        
+        Raises:
+            ReleaseFlowError: If initialization fails.
+        """
         _ensure_copilot()
+        logger.info("🚀 Initializing Copilot SDK...")
         print("🚀 Initializing Copilot SDK...")
-        self.copilot_client = CopilotClient()
-        await self.copilot_client.start()
-        print("✅ Copilot SDK initialized")
+        try:
+            self.copilot_client = CopilotClient()
+            await self.copilot_client.start()
+            logger.info("✅ Copilot SDK initialized")
+            print("✅ Copilot SDK initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Copilot SDK: {e}")
+            raise ReleaseFlowError(f"Failed to initialize Copilot SDK: {e}")
     
-    async def close_copilot(self):
-        """Close the Copilot SDK client."""
+    async def close_copilot(self) -> None:
+        """
+        Close the Copilot SDK client.
+        
+        Ensures proper cleanup of resources.
+        """
         if self.copilot_client:
-            await self.copilot_client.stop()
-            self.copilot_client = None
+            try:
+                await self.copilot_client.stop()
+                logger.debug("Copilot SDK client stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping Copilot client: {e}")
+            finally:
+                self.copilot_client = None
     
     def run_git(self, *args, check: bool = True) -> subprocess.CompletedProcess:
         """
@@ -178,24 +228,36 @@ class ReleaseFlow:
             check=check
         )
     
-    def ensure_clean_state(self):
-        """Ensure the repo is in a clean state on the main branch."""
+    def ensure_clean_state(self) -> None:
+        """
+        Ensure the repo is in a clean state on the main branch.
+        
+        Raises:
+            ReleaseFlowError: If git operations fail.
+        """
         main_branch = self.config.git.main_branch
+        logger.info(f"🔄 Ensuring clean git state on {main_branch}...")
         print(f"🔄 Ensuring clean git state on {main_branch}...")
         
-        if self.config.git.auto_stash:
-            self.run_git("stash", "--include-untracked", check=False)
-        
-        self.run_git("checkout", main_branch, check=False)
-        
-        print("⬇️ Pulling latest code...")
-        self.run_git("fetch", "origin")
-        self.run_git("pull", "origin", main_branch, "--rebase", check=False)
-        
-        if self.config.git.force_reset:
-            self.run_git("reset", "--hard", f"origin/{main_branch}")
-        
-        print(f"✅ Repository is clean and up to date")
+        try:
+            if self.config.git.auto_stash:
+                self.run_git("stash", "--include-untracked", check=False)
+            
+            self.run_git("checkout", main_branch, check=False)
+            
+            logger.info("⬇️ Pulling latest code...")
+            print("⬇️ Pulling latest code...")
+            self.run_git("fetch", "origin")
+            self.run_git("pull", "origin", main_branch, "--rebase", check=False)
+            
+            if self.config.git.force_reset:
+                self.run_git("reset", "--hard", f"origin/{main_branch}")
+            
+            logger.info("✅ Repository is clean and up to date")
+            print(f"✅ Repository is clean and up to date")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Git operation failed: {e}")
+            raise ReleaseFlowError(f"Failed to ensure clean state: {e}")
     
     def create_branch(self, prompt: str) -> str:
         """
@@ -206,18 +268,26 @@ class ReleaseFlow:
             
         Returns:
             The branch name.
+            
+        Raises:
+            ReleaseFlowError: If branch creation fails.
         """
         prefix = self.config.git.branch_prefix
         words = prompt.lower().split()[:4]
-        branch_suffix = "-".join(w for w in words if w.isalnum())[:30]
+        branch_suffix = "-".join(w for w in words if w.isalnum())[:MAX_BRANCH_SUFFIX_LENGTH]
         branch_name = f"{prefix}/{self.run_id}-{branch_suffix}"
         
+        logger.info(f"🌿 Creating branch: {branch_name}")
         print(f"🌿 Creating branch: {branch_name}")
-        self.run_git("checkout", "-b", branch_name)
         
-        return branch_name
+        try:
+            self.run_git("checkout", "-b", branch_name)
+            return branch_name
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to create branch: {e}")
+            raise ReleaseFlowError(f"Failed to create branch {branch_name}: {e}")
     
-    async def evaluate_and_implement(self, prompt: str) -> dict:
+    async def evaluate_and_implement(self, prompt: str) -> Dict[str, Any]:
         """
         Use Copilot SDK to evaluate the codebase and implement changes.
         
@@ -226,7 +296,11 @@ class ReleaseFlow:
             
         Returns:
             Dict with files_changed, summary, and recommendations.
+            
+        Raises:
+            ReleaseFlowError: If evaluation fails and no fallback is available.
         """
+        logger.info(f"🤖 Evaluating codebase with prompt: '{prompt}'")
         print(f"\n🤖 Evaluating codebase with prompt:\n   '{prompt}'")
         
         full_prompt = f"""
@@ -285,13 +359,27 @@ After making changes, provide a summary of:
             }
             
         except Exception as e:
+            logger.error(f"⚠️ Copilot evaluation failed: {e}")
             print(f"⚠️ Copilot evaluation failed: {e}")
             if self.config.copilot.fallback_to_cli:
+                logger.info("Attempting CLI fallback")
                 return await self._fallback_copilot_cli(prompt)
-            raise
+            raise ReleaseFlowError(f"Copilot evaluation failed: {e}")
     
-    async def _fallback_copilot_cli(self, prompt: str) -> dict:
-        """Fallback method using Copilot CLI directly."""
+    async def _fallback_copilot_cli(self, prompt: str) -> Dict[str, Any]:
+        """
+        Fallback method using Copilot CLI directly.
+        
+        Args:
+            prompt: The improvement prompt.
+            
+        Returns:
+            Dict with files_changed, summary, and recommendations.
+            
+        Raises:
+            ReleaseFlowError: If CLI fallback also fails.
+        """
+        logger.info("🔄 Using Copilot CLI fallback...")
         print("🔄 Using Copilot CLI fallback...")
         
         try:
@@ -323,7 +411,7 @@ After making changes, provide a summary of:
                 "Install from: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli"
             )
     
-    def commit_changes(self, prompt: str, files_changed: list) -> bool:
+    def commit_changes(self, prompt: str, files_changed: List[str]) -> bool:
         """
         Commit the changes made by Copilot.
         
@@ -333,36 +421,63 @@ After making changes, provide a summary of:
             
         Returns:
             True if changes were committed, False if no changes.
+            
+        Raises:
+            ReleaseFlowError: If commit operation fails.
         """
         if not files_changed:
+            logger.info("ℹ️ No changes to commit")
             print("ℹ️ No changes to commit")
             return False
         
+        logger.info(f"📦 Committing {len(files_changed)} changed files...")
         print(f"📦 Committing {len(files_changed)} changed files...")
         
-        self.run_git("add", "-A")
-        
-        prefix = self.config.git.commit_prefix
-        commit_msg = f"""{prefix} {prompt[:50]}{'...' if len(prompt) > 50 else ''}
+        try:
+            self.run_git("add", "-A")
+            
+            prefix = self.config.git.commit_prefix
+            truncated_prompt = prompt[:MAX_PROMPT_LENGTH_COMMIT]
+            ellipsis = '...' if len(prompt) > MAX_PROMPT_LENGTH_COMMIT else ''
+            
+            commit_msg = f"""{prefix} {truncated_prompt}{ellipsis}
 
 Automated improvement by Release Flow.
 
 Files changed:
-{chr(10).join(f'- {f}' for f in files_changed[:20])}
-{'... and more' if len(files_changed) > 20 else ''}
+{chr(10).join(f'- {f}' for f in files_changed[:MAX_COMMIT_MSG_FILES])}
+{'... and more' if len(files_changed) > MAX_COMMIT_MSG_FILES else ''}
 
 Run ID: {self.run_id}
 """
-        
-        self.run_git("commit", "-m", commit_msg)
-        print("✅ Changes committed")
-        return True
+            
+            self.run_git("commit", "-m", commit_msg)
+            logger.info("✅ Changes committed")
+            print("✅ Changes committed")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to commit changes: {e}")
+            raise ReleaseFlowError(f"Failed to commit changes: {e}")
     
-    def push_branch(self, branch_name: str):
-        """Push the branch to origin."""
+    def push_branch(self, branch_name: str) -> None:
+        """
+        Push the branch to origin.
+        
+        Args:
+            branch_name: Name of the branch to push.
+            
+        Raises:
+            ReleaseFlowError: If push operation fails.
+        """
+        logger.info(f"⬆️ Pushing branch {branch_name}...")
         print(f"⬆️ Pushing branch {branch_name}...")
-        self.run_git("push", "-u", "origin", branch_name)
-        print("✅ Branch pushed")
+        try:
+            self.run_git("push", "-u", "origin", branch_name)
+            logger.info("✅ Branch pushed")
+            print("✅ Branch pushed")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to push branch: {e}")
+            raise ReleaseFlowError(f"Failed to push branch {branch_name}: {e}")
     
     def create_pull_request(self, branch_name: str, prompt: str, summary: str) -> int:
         """
@@ -375,19 +490,26 @@ Run ID: {self.run_id}
             
         Returns:
             The PR number.
+            
+        Raises:
+            ReleaseFlowError: If PR creation fails.
         """
+        logger.info("📋 Creating pull request...")
         print("📋 Creating pull request...")
         
         prefix = self.config.pr.title_prefix
-        pr_title = f"{prefix} {prompt[:60]}{'...' if len(prompt) > 60 else ''}"
+        truncated_prompt = prompt[:MAX_PROMPT_LENGTH_PR]
+        ellipsis = '...' if len(prompt) > MAX_PROMPT_LENGTH_PR else ''
+        pr_title = f"{prefix} {truncated_prompt}{ellipsis}"
         
+        truncated_summary = summary[:MAX_PR_BODY_LENGTH] if summary else 'See commits for details.'
         pr_body = f"""## Automated Improvement by Release Flow
 
 ### Prompt
 > {prompt}
 
 ### Summary
-{summary[:2000] if summary else 'See commits for details.'}
+{truncated_summary}
 
 ### Review Checklist
 - [ ] Changes are appropriate and safe
@@ -407,31 +529,46 @@ Run ID: {self.run_id}
                 head=branch_name,
                 base=self.config.git.main_branch,
             )
+            logger.info(f"✅ Pull request created: #{pr.number}")
             print(f"✅ Pull request created: #{pr.number}")
             print(f"   URL: {pr.html_url}")
             
             if self.config.on_pr_created:
-                self.config.on_pr_created(pr.number, pr.html_url)
+                try:
+                    self.config.on_pr_created(pr.number, pr.html_url)
+                except Exception as e:
+                    logger.warning(f"on_pr_created callback failed: {e}")
             
             return pr.number
         except GithubException as e:
+            logger.error(f"Failed to create PR: {e}")
             raise ReleaseFlowError(f"Failed to create PR: {e}")
     
-    def request_review(self, pr_number: int):
-        """Request a Copilot review on the PR."""
+    def request_review(self, pr_number: int) -> None:
+        """
+        Request a Copilot review on the PR.
+        
+        Args:
+            pr_number: The PR number to request review on.
+        """
         if not self.config.pr.auto_request_review:
             return
         
+        logger.info(f"👀 Requesting review for PR #{pr_number}...")
         print(f"👀 Requesting review for PR #{pr_number}...")
-        pr = self.gh_repo.get_pull(pr_number)
-        pr.create_issue_comment(
-            "🤖 @github-copilot please review this PR for:\n"
-            "- Security issues\n"
-            "- Code quality\n"
-            "- Potential bugs\n"
-            "- Test coverage\n"
-        )
-        print("✅ Review requested")
+        try:
+            pr = self.gh_repo.get_pull(pr_number)
+            pr.create_issue_comment(
+                "🤖 @github-copilot please review this PR for:\n"
+                "- Security issues\n"
+                "- Code quality\n"
+                "- Potential bugs\n"
+                "- Test coverage\n"
+            )
+            logger.info("✅ Review requested")
+            print("✅ Review requested")
+        except GithubException as e:
+            logger.warning(f"Failed to request review: {e}")
     
     def wait_for_checks(self, pr_number: int) -> bool:
         """
@@ -446,36 +583,46 @@ Run ID: {self.run_id}
         if not self.config.pr.wait_for_ci:
             return True
         
+        logger.info(f"⏳ Waiting for CI checks on PR #{pr_number}...")
         print(f"⏳ Waiting for CI checks on PR #{pr_number}...")
         
-        pr = self.gh_repo.get_pull(pr_number)
-        start_time = time.time()
-        timeout = self.config.pr.ci_timeout
-        
-        while time.time() - start_time < timeout:
-            commits = list(pr.get_commits())
-            if not commits:
-                time.sleep(10)
-                continue
+        try:
+            pr = self.gh_repo.get_pull(pr_number)
+            start_time = time.time()
+            timeout = self.config.pr.ci_timeout
             
-            last_commit = commits[-1]
-            combined_status = last_commit.get_combined_status()
+            while time.time() - start_time < timeout:
+                commits = list(pr.get_commits())
+                if not commits:
+                    time.sleep(INITIAL_CHECK_DELAY)
+                    continue
+                
+                last_commit = commits[-1]
+                combined_status = last_commit.get_combined_status()
+                
+                if combined_status.state == "success":
+                    logger.info("✅ All checks passed")
+                    print("✅ All checks passed")
+                    return True
+                elif combined_status.state == "failure":
+                    logger.warning("❌ Checks failed")
+                    print("❌ Checks failed")
+                    return False
+                elif combined_status.state == "pending":
+                    logger.debug("Status: pending - waiting...")
+                    print(f"   Status: pending - waiting...")
+                    time.sleep(DEFAULT_CHECK_INTERVAL)
+                else:
+                    logger.info("ℹ️ No CI checks configured, proceeding...")
+                    print("ℹ️ No CI checks configured, proceeding...")
+                    return True
             
-            if combined_status.state == "success":
-                print("✅ All checks passed")
-                return True
-            elif combined_status.state == "failure":
-                print("❌ Checks failed")
-                return False
-            elif combined_status.state == "pending":
-                print(f"   Status: pending - waiting...")
-                time.sleep(30)
-            else:
-                print("ℹ️ No CI checks configured, proceeding...")
-                return True
-        
-        print("⚠️ Timeout waiting for checks")
-        return False
+            logger.warning("⚠️ Timeout waiting for checks")
+            print("⚠️ Timeout waiting for checks")
+            return False
+        except GithubException as e:
+            logger.error(f"Error checking CI status: {e}")
+            return False
     
     def merge_pull_request(self, pr_number: int, auto_merge: bool = False) -> bool:
         """
@@ -507,9 +654,10 @@ Run ID: {self.run_id}
                 try:
                     ref = self.gh_repo.get_git_ref(f"heads/{pr.head.ref}")
                     ref.delete()
+                    logger.info(f"🗑️ Deleted branch {pr.head.ref}")
                     print(f"🗑️ Deleted branch {pr.head.ref}")
-                except:
-                    pass
+                except GithubException as e:
+                    logger.warning(f"Could not delete branch: {e}")
             
             return True
         except GithubException as e:
@@ -517,7 +665,13 @@ Run ID: {self.run_id}
             return False
     
     def run_build(self) -> bool:
-        """Run the build/test process after merge."""
+        """
+        Run the build/test process after merge.
+        
+        Returns:
+            True if build/tests passed or were skipped, False if failed.
+        """
+        logger.info("🔨 Running build/test...")
         print("🔨 Running build/test...")
         
         try:
@@ -528,16 +682,28 @@ Run ID: {self.run_id}
                 cwd=self.local_path,
                 capture_output=True,
                 text=True,
+                timeout=300
             )
             
             if result.returncode == 0:
+                logger.info("✅ Build/tests passed")
                 print("✅ Build/tests passed")
                 return True
             else:
+                logger.warning(f"⚠️ Tests failed:\n{result.stdout}\n{result.stderr}")
                 print(f"⚠️ Tests failed:\n{result.stdout}\n{result.stderr}")
                 return False
                 
+        except subprocess.TimeoutExpired:
+            logger.warning("Build/tests timed out")
+            print("⚠️ Build/tests timed out")
+            return False
+        except FileNotFoundError:
+            logger.info("ℹ️ pytest not found, skipping tests")
+            print(f"ℹ️ Build step skipped: pytest not found")
+            return True
         except Exception as e:
+            logger.info(f"ℹ️ Build step skipped: {e}")
             print(f"ℹ️ Build step skipped: {e}")
             return True
     
@@ -545,7 +711,7 @@ Run ID: {self.run_id}
         self,
         prompt: str,
         auto_merge: bool = False,
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """
         Run a single iteration of the release flow.
         
@@ -596,12 +762,17 @@ Run ID: {self.run_id}
             
         except Exception as e:
             result["error"] = str(e)
+            logger.error(f"❌ Error in iteration: {e}", exc_info=True)
             print(f"❌ Error: {e}")
             
             if self.config.on_error:
-                should_continue = self.config.on_error(e)
-                if not should_continue:
-                    raise
+                try:
+                    should_continue = self.config.on_error(e)
+                    if not should_continue:
+                        raise
+                except Exception as callback_error:
+                    logger.error(f"Error callback failed: {callback_error}")
+                    raise e
         
         finally:
             await self.close_copilot()
@@ -610,9 +781,9 @@ Run ID: {self.run_id}
     
     async def run_continuous(
         self,
-        prompts: list[str] = None,
+        prompts: Optional[List[str]] = None,
         auto_merge: bool = False,
-    ) -> list[dict]:
+    ) -> List[Dict[str, Any]]:
         """
         Run the release flow continuously.
         
@@ -646,7 +817,10 @@ Run ID: {self.run_id}
             print(f"{'=' * 60}\n")
             
             if self.config.on_iteration_start:
-                self.config.on_iteration_start(iteration, prompt)
+                try:
+                    self.config.on_iteration_start(iteration, prompt)
+                except Exception as e:
+                    logger.warning(f"on_iteration_start callback failed: {e}")
             
             self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
             
@@ -657,7 +831,10 @@ Run ID: {self.run_id}
             results.append(result)
             
             if self.config.on_iteration_end:
-                self.config.on_iteration_end(iteration, result)
+                try:
+                    self.config.on_iteration_end(iteration, result)
+                except Exception as e:
+                    logger.warning(f"on_iteration_end callback failed: {e}")
             
             if not result["success"] and self.config.continuous.stop_on_failure:
                 print("⛔ Stopping due to failure")
@@ -670,14 +847,22 @@ Run ID: {self.run_id}
         self._print_summary(results)
         return results
     
-    def _print_summary(self, results: list[dict]):
-        """Print a summary of all iterations."""
-        print("\n" + "=" * 60)
-        print("📊 RELEASE FLOW SUMMARY")
-        print("=" * 60)
+    def _print_summary(self, results: List[Dict[str, Any]]) -> None:
+        """
+        Print a summary of all iterations.
+        
+        Args:
+            results: List of iteration results.
+        """
+        summary = "\n" + "=" * 60 + "\n"
+        summary += "📊 RELEASE FLOW SUMMARY\n"
+        summary += "=" * 60 + "\n"
         
         for i, r in enumerate(results, 1):
             status = "✅" if r["success"] else "❌"
             merged = "🔀" if r["merged"] else "⏸️"
-            print(f"{status} Iteration {i}: {r['prompt'][:40]}... "
-                  f"PR: #{r['pr_number'] or 'N/A'} {merged}")
+            summary += (f"{status} Iteration {i}: {r['prompt'][:40]}... "
+                       f"PR: #{r['pr_number'] or 'N/A'} {merged}\n")
+        
+        logger.info(summary)
+        print(summary)

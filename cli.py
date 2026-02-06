@@ -15,9 +15,18 @@ Usage:
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
+from typing import List
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env if available
 try:
@@ -147,19 +156,46 @@ Environment Variables:
     return parser
 
 
-def load_prompts_from_file(filepath: str) -> list[str]:
-    """Load prompts from a text file (one per line)."""
+def load_prompts_from_file(filepath: str) -> List[str]:
+    """
+    Load prompts from a text file (one per line).
+    
+    Args:
+        filepath: Path to the prompts file.
+        
+    Returns:
+        List of prompts.
+        
+    Raises:
+        FileNotFoundError: If the file doesn't exist.
+        IOError: If the file cannot be read.
+    """
+    if not Path(filepath).exists():
+        raise FileNotFoundError(f"Prompts file not found: {filepath}")
+    
     prompts = []
-    with open(filepath, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                prompts.append(line)
-    return prompts
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    prompts.append(line)
+                    logger.debug(f"Loaded prompt {line_num}: {line[:50]}...")
+        
+        if not prompts:
+            logger.warning(f"No valid prompts found in {filepath}")
+        
+        return prompts
+    except IOError as e:
+        raise IOError(f"Failed to read prompts file {filepath}: {e}")
 
 
-def main():
-    """Main entry point."""
+def main() -> None:
+    """
+    Main entry point for the CLI.
+    
+    Exits with code 0 on success, 1 on failure.
+    """
     parser = create_parser()
     args = parser.parse_args()
     
@@ -172,65 +208,108 @@ def main():
         ContinuousConfig,
         DEFAULT_PROMPTS,
     )
-    from .core import ReleaseFlow
+    from .core import ReleaseFlow, ReleaseFlowError
     
     # Build configuration
     prompts = []
     if args.prompts_file:
-        prompts = load_prompts_from_file(args.prompts_file)
+        try:
+            prompts = load_prompts_from_file(args.prompts_file)
+            logger.info(f"Loaded {len(prompts)} prompts from {args.prompts_file}")
+        except (FileNotFoundError, IOError) as e:
+            logger.error(f"❌ {e}")
+            print(f"❌ {e}")
+            sys.exit(1)
     elif args.continuous:
         prompts = DEFAULT_PROMPTS.copy()
+        logger.info(f"Using {len(prompts)} default prompts")
     
-    config = ReleaseFlowConfig(
-        repo=args.repo,
-        local_path=Path(args.path).resolve(),
-        prompts=prompts,
-        git=GitConfig(
-            main_branch=args.main_branch,
-        ),
-        copilot=CopilotConfig(
-            timeout=args.timeout,
-        ),
-        pr=PRConfig(
-            merge_method=args.merge_method,
-            wait_for_ci=not args.no_wait_ci,
-        ),
-        continuous=ContinuousConfig(
-            max_iterations=args.iterations,
-            delay_between_runs=args.delay,
-            stop_on_failure=args.stop_on_failure,
-        ),
-    )
+    # Validate repository format
+    if "/" not in args.repo:
+        logger.error(f"❌ Invalid repo format: '{args.repo}'. Expected 'owner/name'")
+        print(f"❌ Invalid repo format: '{args.repo}'. Expected 'owner/name'")
+        sys.exit(1)
+    
+    try:
+        config = ReleaseFlowConfig(
+            repo=args.repo,
+            local_path=Path(args.path).resolve(),
+            prompts=prompts,
+            git=GitConfig(
+                main_branch=args.main_branch,
+            ),
+            copilot=CopilotConfig(
+                timeout=args.timeout,
+            ),
+            pr=PRConfig(
+                merge_method=args.merge_method,
+                wait_for_ci=not args.no_wait_ci,
+            ),
+            continuous=ContinuousConfig(
+                max_iterations=args.iterations,
+                delay_between_runs=args.delay,
+                stop_on_failure=args.stop_on_failure,
+            ),
+        )
+    except ValueError as e:
+        logger.error(f"❌ Configuration error: {e}")
+        print(f"❌ Configuration error: {e}")
+        sys.exit(1)
     
     # Initialize the release flow
     try:
         flow = ReleaseFlow(config)
+    except ReleaseFlowError as e:
+        logger.error(f"❌ Failed to initialize: {e}")
+        print(f"❌ Failed to initialize: {e}")
+        sys.exit(1)
     except Exception as e:
+        logger.error(f"❌ Unexpected error during initialization: {e}", exc_info=True)
         print(f"❌ Failed to initialize: {e}")
         sys.exit(1)
     
     # Run
-    if args.continuous:
-        results = asyncio.run(flow.run_continuous(
-            auto_merge=args.auto_merge,
-        ))
-        
-        # Exit with error if any iteration failed
-        if any(not r["success"] for r in results):
-            sys.exit(1)
-    else:
-        result = asyncio.run(flow.run_single_iteration(
-            prompt=args.prompt,
-            auto_merge=args.auto_merge,
-        ))
-        
-        if result["success"]:
-            print(f"\n✅ Release flow completed successfully!")
-            if result["pr_number"]:
-                print(f"   PR: https://github.com/{args.repo}/pull/{result['pr_number']}")
+    try:
+        if args.continuous:
+            results = asyncio.run(flow.run_continuous(
+                auto_merge=args.auto_merge,
+            ))
+            
+            # Print summary
+            successful = sum(1 for r in results if r["success"])
+            logger.info(f"Completed {successful}/{len(results)} iterations successfully")
+            
+            # Exit with error if any iteration failed
+            if any(not r["success"] for r in results):
+                sys.exit(1)
         else:
-            print(f"\n❌ Release flow failed: {result['error']}")
-            sys.exit(1)
+            result = asyncio.run(flow.run_single_iteration(
+                prompt=args.prompt,
+                auto_merge=args.auto_merge,
+            ))
+            
+            if result["success"]:
+                logger.info("✅ Release flow completed successfully")
+                print(f"\n✅ Release flow completed successfully!")
+                if result["pr_number"]:
+                    pr_url = f"https://github.com/{args.repo}/pull/{result['pr_number']}"
+                    print(f"   PR: {pr_url}")
+            else:
+                logger.error(f"❌ Release flow failed: {result['error']}")
+                print(f"\n❌ Release flow failed: {result['error']}")
+                sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        print("\n⚠️ Interrupted by user")
+        sys.exit(130)
+    except ReleaseFlowError as e:
+        logger.error(f"❌ Release flow error: {e}")
+        print(f"\n❌ {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {e}", exc_info=True)
+        print(f"\n❌ Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
