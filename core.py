@@ -6,14 +6,23 @@ the automated release process using GitHub Copilot SDK.
 """
 
 import asyncio
+import logging
 import os
 import re
 import subprocess
 import sys
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List, Any, Tuple
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Lazy imports for optional dependencies
 Github = None
@@ -21,8 +30,13 @@ GithubException = None
 CopilotClient = None
 
 
-def _ensure_github():
-    """Ensure PyGithub is installed and imported."""
+def _ensure_github() -> None:
+    """
+    Ensure PyGithub is installed and imported.
+    
+    Raises:
+        RuntimeError: If installation fails.
+    """
     global Github, GithubException
     if Github is None:
         try:
@@ -30,30 +44,89 @@ def _ensure_github():
             Github = _Github
             GithubException = _GithubException
         except ImportError:
-            print("Installing PyGithub...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "PyGithub"])
-            from github import Github as _Github, GithubException as _GithubException
-            Github = _Github
-            GithubException = _GithubException
+            logger.info("Installing PyGithub...")
+            try:
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "PyGithub"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE
+                )
+                from github import Github as _Github, GithubException as _GithubException
+                Github = _Github
+                GithubException = _GithubException
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Failed to install PyGithub: {e.stderr.decode() if e.stderr else str(e)}") from e
 
 
-def _ensure_copilot():
-    """Ensure Copilot SDK is installed and imported."""
+def _ensure_copilot() -> None:
+    """
+    Ensure Copilot SDK is installed and imported.
+    
+    Raises:
+        RuntimeError: If installation fails.
+    """
     global CopilotClient
     if CopilotClient is None:
         try:
             from copilot.client import CopilotClient as _CopilotClient
             CopilotClient = _CopilotClient
         except ImportError:
-            print("Installing github-copilot-sdk...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "github-copilot-sdk"])
-            from copilot.client import CopilotClient as _CopilotClient
-            CopilotClient = _CopilotClient
+            logger.info("Installing github-copilot-sdk...")
+            try:
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "github-copilot-sdk"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE
+                )
+                from copilot.client import CopilotClient as _CopilotClient
+                CopilotClient = _CopilotClient
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Failed to install github-copilot-sdk: {e.stderr.decode() if e.stderr else str(e)}") from e
 
 
 class ReleaseFlowError(Exception):
     """Custom exception for release flow errors."""
     pass
+
+
+class ConfigurationError(ReleaseFlowError):
+    """Exception raised for configuration errors."""
+    pass
+
+
+class GitOperationError(ReleaseFlowError):
+    """Exception raised for git operation failures."""
+    pass
+
+
+class CopilotError(ReleaseFlowError):
+    """Exception raised for Copilot SDK errors."""
+    pass
+
+
+class PROperationError(ReleaseFlowError):
+    """Exception raised for pull request operation failures."""
+    pass
+
+
+@asynccontextmanager
+async def copilot_session(flow_instance: 'ReleaseFlow'):
+    """
+    Context manager for Copilot SDK session.
+    
+    Ensures proper initialization and cleanup of Copilot client.
+    
+    Args:
+        flow_instance: ReleaseFlow instance.
+        
+    Yields:
+        The ReleaseFlow instance with initialized Copilot client.
+    """
+    try:
+        await flow_instance.initialize_copilot()
+        yield flow_instance
+    finally:
+        await flow_instance.close_copilot()
 
 
 def _sanitize_branch_name(name: str) -> str:
@@ -194,23 +267,36 @@ class ReleaseFlow:
         
         Args:
             config: ReleaseFlowConfig instance with all settings.
+            
+        Raises:
+            ConfigurationError: If configuration is invalid.
+            ReleaseFlowError: If initialization fails.
         """
         from .config import ReleaseFlowConfig, DEFAULT_PROMPTS
         
         if isinstance(config, dict):
-            config = ReleaseFlowConfig(**config)
+            try:
+                config = ReleaseFlowConfig(**config)
+            except (TypeError, ValueError) as e:
+                raise ConfigurationError(f"Invalid configuration: {e}") from e
         
         self.config = config
         
         # Validate and sanitize inputs
-        _validate_repo_name(config.repo)
+        try:
+            _validate_repo_name(config.repo)
+        except ValueError as e:
+            raise ConfigurationError(str(e)) from e
+            
         self.repo = config.repo
         
         # Validate local path
         try:
             self.local_path = _validate_path(Path(config.local_path))
+            if not self.local_path.exists():
+                raise ConfigurationError(f"Local path does not exist: {self.local_path}")
         except ValueError as e:
-            raise ReleaseFlowError(f"Invalid local path: {e}")
+            raise ConfigurationError(f"Invalid local path: {e}") from e
         
         # Get GitHub token (never log or print the actual token)
         self.github_token = config.github_token or os.environ.get("GITHUB_TOKEN")
@@ -218,7 +304,7 @@ class ReleaseFlow:
             self.github_token = self._get_gh_token()
         
         if not self.github_token:
-            raise ReleaseFlowError(
+            raise ConfigurationError(
                 "GITHUB_TOKEN not set. Either set the environment variable, "
                 "pass it in config, or run 'gh auth login'"
             )
@@ -230,7 +316,7 @@ class ReleaseFlow:
             self.gh_repo = self.github.get_repo(self.repo)
         except Exception as e:
             # Never expose the token in error messages
-            raise ReleaseFlowError(f"Failed to connect to GitHub repository '{self.repo}'") from e
+            raise ConfigurationError(f"Failed to connect to GitHub repository '{self.repo}': {type(e).__name__}") from e
         
         # Copilot client (initialized lazily)
         self.copilot_client = None
@@ -241,71 +327,129 @@ class ReleaseFlow:
         # Use default prompts if none provided
         if not config.prompts:
             config.prompts = DEFAULT_PROMPTS.copy()
+        
+        logger.info(f"Initialized ReleaseFlow for repository: {self.repo}")
     
     def _get_gh_token(self) -> Optional[str]:
-        """Try to get GitHub token from gh CLI."""
+        """
+        Try to get GitHub token from gh CLI.
+        
+        Returns:
+            GitHub token if available, None otherwise.
+        """
         try:
             result = subprocess.run(
                 ["gh", "auth", "token"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=5
             )
-            return result.stdout.strip()
+            token = result.stdout.strip()
+            if token:
+                logger.info("GitHub token obtained from gh CLI")
+                return token
+            return None
+        except subprocess.TimeoutExpired:
+            logger.warning("Timeout while trying to get token from gh CLI")
+            return None
         except (subprocess.CalledProcessError, FileNotFoundError):
+            logger.debug("Could not obtain token from gh CLI")
             return None
     
-    async def initialize_copilot(self):
-        """Initialize the Copilot SDK client."""
-        _ensure_copilot()
-        print("🚀 Initializing Copilot SDK...")
-        self.copilot_client = CopilotClient()
-        await self.copilot_client.start()
-        print("✅ Copilot SDK initialized")
+    async def initialize_copilot(self) -> None:
+        """
+        Initialize the Copilot SDK client.
+        
+        Raises:
+            CopilotError: If initialization fails.
+        """
+        try:
+            _ensure_copilot()
+            logger.info("Initializing Copilot SDK...")
+            self.copilot_client = CopilotClient()
+            await self.copilot_client.start()
+            logger.info("Copilot SDK initialized successfully")
+        except Exception as e:
+            raise CopilotError(f"Failed to initialize Copilot SDK: {e}") from e
     
-    async def close_copilot(self):
-        """Close the Copilot SDK client."""
+    async def close_copilot(self) -> None:
+        """
+        Close the Copilot SDK client.
+        
+        Ensures proper cleanup of resources.
+        """
         if self.copilot_client:
-            await self.copilot_client.stop()
-            self.copilot_client = None
+            try:
+                await self.copilot_client.stop()
+                logger.info("Copilot SDK closed successfully")
+            except Exception as e:
+                logger.error(f"Error closing Copilot SDK: {e}")
+            finally:
+                self.copilot_client = None
     
-    def run_git(self, *args, check: bool = True) -> subprocess.CompletedProcess:
+    def run_git(self, *args: str, check: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
         """
         Run a git command in the local repo.
         
         Args:
             *args: Git command arguments.
             check: Whether to raise on non-zero exit code.
+            timeout: Command timeout in seconds.
             
         Returns:
             CompletedProcess instance.
+            
+        Raises:
+            GitOperationError: If git command fails.
         """
-        return subprocess.run(
-            ["git", *args],
-            cwd=self.local_path,
-            capture_output=True,
-            text=True,
-            check=check
-        )
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=self.local_path,
+                capture_output=True,
+                text=True,
+                check=check,
+                timeout=timeout
+            )
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"Git command timed out after {timeout}s: git {' '.join(args)}") from e
+        except subprocess.CalledProcessError as e:
+            raise GitOperationError(
+                f"Git command failed: git {' '.join(args)}\n"
+                f"Exit code: {e.returncode}\n"
+                f"Error: {e.stderr}"
+            ) from e
+        except Exception as e:
+            raise GitOperationError(f"Unexpected error running git command: {e}") from e
     
-    def ensure_clean_state(self):
-        """Ensure the repo is in a clean state on the main branch."""
+    def ensure_clean_state(self) -> None:
+        """
+        Ensure the repo is in a clean state on the main branch.
+        
+        Raises:
+            GitOperationError: If git operations fail.
+        """
         main_branch = self.config.git.main_branch
-        print(f"🔄 Ensuring clean git state on {main_branch}...")
+        logger.info(f"Ensuring clean git state on {main_branch}...")
         
-        if self.config.git.auto_stash:
-            self.run_git("stash", "--include-untracked", check=False)
-        
-        self.run_git("checkout", main_branch, check=False)
-        
-        print("⬇️ Pulling latest code...")
-        self.run_git("fetch", "origin")
-        self.run_git("pull", "origin", main_branch, "--rebase", check=False)
-        
-        if self.config.git.force_reset:
-            self.run_git("reset", "--hard", f"origin/{main_branch}")
-        
-        print(f"✅ Repository is clean and up to date")
+        try:
+            if self.config.git.auto_stash:
+                self.run_git("stash", "--include-untracked", check=False)
+            
+            self.run_git("checkout", main_branch, check=False)
+            
+            logger.info("Pulling latest code...")
+            self.run_git("fetch", "origin")
+            self.run_git("pull", "origin", main_branch, "--rebase", check=False)
+            
+            if self.config.git.force_reset:
+                self.run_git("reset", "--hard", f"origin/{main_branch}")
+            
+            logger.info("Repository is clean and up to date")
+        except GitOperationError as e:
+            logger.error(f"Failed to ensure clean state: {e}")
+            raise
     
     def create_branch(self, prompt: str) -> str:
         """

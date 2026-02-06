@@ -39,6 +39,10 @@ from .config import (
 from .core import (
     ReleaseFlow,
     ReleaseFlowError,
+    ConfigurationError,
+    GitOperationError,
+    CopilotError,
+    PROperationError,
 )
 
 __all__ = [
@@ -54,4 +58,8 @@ __all__ = [
     # Core classes
     "ReleaseFlow",
     "ReleaseFlowError",
+    "ConfigurationError",
+    "GitOperationError",
+    "CopilotError",
+    "PROperationError",
 ]
