@@ -7,6 +7,7 @@ the automated release process using GitHub Copilot SDK.
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 import time
@@ -53,6 +54,103 @@ def _ensure_copilot():
 class ReleaseFlowError(Exception):
     """Custom exception for release flow errors."""
     pass
+
+
+def _sanitize_branch_name(name: str) -> str:
+    """
+    Sanitize branch name to prevent injection attacks.
+    
+    Args:
+        name: Raw branch name.
+        
+    Returns:
+        Sanitized branch name safe for git operations.
+    """
+    # Remove any characters that could be used for command injection
+    # Only allow alphanumeric, hyphens, underscores, and forward slashes
+    sanitized = re.sub(r'[^a-zA-Z0-9\-_/]', '-', name)
+    # Remove consecutive dashes and leading/trailing dashes
+    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
+    # Prevent git ref manipulation
+    sanitized = sanitized.replace('..', '-').replace('//', '/')
+    return sanitized[:100]  # Limit length
+
+
+def _sanitize_input(text: str, max_length: int = 1000) -> str:
+    """
+    Sanitize user input to prevent injection attacks.
+    
+    Args:
+        text: Raw user input.
+        max_length: Maximum allowed length.
+        
+    Returns:
+        Sanitized text.
+    """
+    if not isinstance(text, str):
+        raise ValueError("Input must be a string")
+    
+    # Limit length
+    text = text[:max_length]
+    
+    # Remove null bytes and control characters except newlines and tabs
+    text = ''.join(c for c in text if c == '\n' or c == '\t' or (ord(c) >= 32 and ord(c) != 127))
+    
+    return text
+
+
+def _validate_repo_name(repo: str) -> bool:
+    """
+    Validate GitHub repository name format.
+    
+    Args:
+        repo: Repository name in 'owner/name' format.
+        
+    Returns:
+        True if valid, raises ValueError if invalid.
+    """
+    if not repo or not isinstance(repo, str):
+        raise ValueError("Repository name must be a non-empty string")
+    
+    # Check format: owner/name
+    pattern = r'^[a-zA-Z0-9][-a-zA-Z0-9]{0,38}/[a-zA-Z0-9_.-]{1,100}$'
+    if not re.match(pattern, repo):
+        raise ValueError(
+            f"Invalid repository format: '{repo}'. "
+            "Expected format: 'owner/name' (e.g., 'microsoft/vscode')"
+        )
+    
+    return True
+
+
+def _validate_path(path: Path, base_path: Path = None) -> Path:
+    """
+    Validate and resolve a file path to prevent path traversal attacks.
+    
+    Args:
+        path: Path to validate.
+        base_path: Optional base path to restrict access to.
+        
+    Returns:
+        Resolved absolute path.
+        
+    Raises:
+        ValueError: If path is invalid or attempts traversal.
+    """
+    try:
+        resolved = path.resolve()
+        
+        if base_path:
+            base_resolved = base_path.resolve()
+            # Check if resolved path is within base path
+            try:
+                resolved.relative_to(base_resolved)
+            except ValueError:
+                raise ValueError(f"Path traversal detected: {path} is outside {base_path}")
+        
+        return resolved
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"Invalid path: {path}") from e
 
 
 class ReleaseFlow:
@@ -103,10 +201,18 @@ class ReleaseFlow:
             config = ReleaseFlowConfig(**config)
         
         self.config = config
-        self.local_path = config.local_path
+        
+        # Validate and sanitize inputs
+        _validate_repo_name(config.repo)
         self.repo = config.repo
         
-        # Get GitHub token
+        # Validate local path
+        try:
+            self.local_path = _validate_path(Path(config.local_path))
+        except ValueError as e:
+            raise ReleaseFlowError(f"Invalid local path: {e}")
+        
+        # Get GitHub token (never log or print the actual token)
         self.github_token = config.github_token or os.environ.get("GITHUB_TOKEN")
         if not self.github_token:
             self.github_token = self._get_gh_token()
@@ -119,8 +225,12 @@ class ReleaseFlow:
         
         # Initialize GitHub client
         _ensure_github()
-        self.github = Github(self.github_token)
-        self.gh_repo = self.github.get_repo(self.repo)
+        try:
+            self.github = Github(self.github_token)
+            self.gh_repo = self.github.get_repo(self.repo)
+        except Exception as e:
+            # Never expose the token in error messages
+            raise ReleaseFlowError(f"Failed to connect to GitHub repository '{self.repo}'") from e
         
         # Copilot client (initialized lazily)
         self.copilot_client = None
@@ -207,10 +317,13 @@ class ReleaseFlow:
         Returns:
             The branch name.
         """
-        prefix = self.config.git.branch_prefix
-        words = prompt.lower().split()[:4]
+        # Sanitize inputs to prevent injection
+        prefix = _sanitize_branch_name(self.config.git.branch_prefix)
+        prompt_sanitized = _sanitize_input(prompt, max_length=200)
+        
+        words = prompt_sanitized.lower().split()[:4]
         branch_suffix = "-".join(w for w in words if w.isalnum())[:30]
-        branch_name = f"{prefix}/{self.run_id}-{branch_suffix}"
+        branch_name = _sanitize_branch_name(f"{prefix}/{self.run_id}-{branch_suffix}")
         
         print(f"🌿 Creating branch: {branch_name}")
         self.run_git("checkout", "-b", branch_name)
@@ -227,7 +340,9 @@ class ReleaseFlow:
         Returns:
             Dict with files_changed, summary, and recommendations.
         """
-        print(f"\n🤖 Evaluating codebase with prompt:\n   '{prompt}'")
+        # Sanitize prompt to prevent injection
+        prompt = _sanitize_input(prompt, max_length=2000)
+        print(f"\n🤖 Evaluating codebase with prompt:\n   '{prompt[:100]}{'...' if len(prompt) > 100 else ''}'")
         
         full_prompt = f"""
 You are analyzing and improving the codebase at {self.local_path}.
@@ -294,13 +409,19 @@ After making changes, provide a summary of:
         """Fallback method using Copilot CLI directly."""
         print("🔄 Using Copilot CLI fallback...")
         
+        # Sanitize all inputs
+        prompt = _sanitize_input(prompt, max_length=2000)
+        cli_command = _sanitize_input(self.config.copilot.cli_command, max_length=100)
+        
         try:
+            # Use list of arguments (not shell=True) to prevent injection
             result = subprocess.run(
-                [self.config.copilot.cli_command, "--non-interactive", "-m", prompt],
+                [cli_command, "--non-interactive", "-m", prompt],
                 cwd=self.local_path,
                 capture_output=True,
                 text=True,
                 timeout=self.config.copilot.timeout,
+                shell=False,  # Explicitly disable shell
             )
             
             git_result = self.run_git("status", "--porcelain")
@@ -342,13 +463,19 @@ After making changes, provide a summary of:
         
         self.run_git("add", "-A")
         
-        prefix = self.config.git.commit_prefix
-        commit_msg = f"""{prefix} {prompt[:50]}{'...' if len(prompt) > 50 else ''}
+        # Sanitize commit message components
+        prefix = _sanitize_input(self.config.git.commit_prefix, max_length=50)
+        prompt_sanitized = _sanitize_input(prompt, max_length=200)
+        
+        # Sanitize file names in the commit message
+        safe_files = [_sanitize_input(f, max_length=200) for f in files_changed[:20]]
+        
+        commit_msg = f"""{prefix} {prompt_sanitized[:50]}{'...' if len(prompt_sanitized) > 50 else ''}
 
 Automated improvement by Release Flow.
 
 Files changed:
-{chr(10).join(f'- {f}' for f in files_changed[:20])}
+{chr(10).join(f'- {f}' for f in safe_files)}
 {'... and more' if len(files_changed) > 20 else ''}
 
 Run ID: {self.run_id}
@@ -378,16 +505,21 @@ Run ID: {self.run_id}
         """
         print("📋 Creating pull request...")
         
-        prefix = self.config.pr.title_prefix
-        pr_title = f"{prefix} {prompt[:60]}{'...' if len(prompt) > 60 else ''}"
+        # Sanitize all inputs for PR content
+        prefix = _sanitize_input(self.config.pr.title_prefix, max_length=50)
+        prompt_sanitized = _sanitize_input(prompt, max_length=500)
+        summary_sanitized = _sanitize_input(summary, max_length=5000)
+        branch_name_sanitized = _sanitize_branch_name(branch_name)
+        
+        pr_title = f"{prefix} {prompt_sanitized[:60]}{'...' if len(prompt_sanitized) > 60 else ''}"
         
         pr_body = f"""## Automated Improvement by Release Flow
 
 ### Prompt
-> {prompt}
+> {prompt_sanitized}
 
 ### Summary
-{summary[:2000] if summary else 'See commits for details.'}
+{summary_sanitized[:2000] if summary_sanitized else 'See commits for details.'}
 
 ### Review Checklist
 - [ ] Changes are appropriate and safe
@@ -404,7 +536,7 @@ Run ID: {self.run_id}
             pr = self.gh_repo.create_pull(
                 title=pr_title,
                 body=pr_body,
-                head=branch_name,
+                head=branch_name_sanitized,
                 base=self.config.git.main_branch,
             )
             print(f"✅ Pull request created: #{pr.number}")

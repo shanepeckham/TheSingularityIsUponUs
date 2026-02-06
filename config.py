@@ -148,6 +148,30 @@ class ReleaseFlowConfig:
         """Validate configuration after initialization."""
         if isinstance(self.local_path, str):
             self.local_path = Path(self.local_path)
+        
+        # Validate repository format
+        if self.repo:
+            import re
+            pattern = r'^[a-zA-Z0-9][-a-zA-Z0-9]{0,38}/[a-zA-Z0-9_.-]{1,100}$'
+            if not re.match(pattern, self.repo):
+                raise ValueError(
+                    f"Invalid repository format: '{self.repo}'. "
+                    "Expected format: 'owner/name' (e.g., 'microsoft/vscode')"
+                )
+        
+        # Validate timeout values are positive
+        if hasattr(self.copilot, 'timeout') and self.copilot.timeout <= 0:
+            raise ValueError("Copilot timeout must be positive")
+        
+        if hasattr(self.pr, 'ci_timeout') and self.pr.ci_timeout <= 0:
+            raise ValueError("CI timeout must be positive")
+        
+        # Validate continuous config
+        if hasattr(self.continuous, 'max_iterations') and self.continuous.max_iterations <= 0:
+            raise ValueError("Max iterations must be positive")
+        
+        if hasattr(self.continuous, 'delay_between_runs') and self.continuous.delay_between_runs < 0:
+            raise ValueError("Delay between runs cannot be negative")
 
 
 # Default prompts for code improvement
