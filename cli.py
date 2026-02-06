@@ -148,14 +148,54 @@ Environment Variables:
 
 
 def load_prompts_from_file(filepath: str) -> list[str]:
-    """Load prompts from a text file (one per line)."""
-    prompts = []
-    with open(filepath, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                prompts.append(line)
-    return prompts
+    """
+    Load prompts from a text file (one per line).
+    
+    Args:
+        filepath: Path to the prompts file.
+        
+    Returns:
+        List of sanitized prompts.
+        
+    Raises:
+        ValueError: If file path is invalid or file is too large.
+    """
+    from pathlib import Path
+    
+    try:
+        # Validate the file path to prevent path traversal
+        file_path = Path(filepath).resolve()
+        
+        # Security: Check file size to prevent DoS via huge files
+        max_size = 1024 * 1024  # 1MB
+        if file_path.stat().st_size > max_size:
+            raise ValueError(f"Prompts file too large (max {max_size} bytes)")
+        
+        # Security: Only read from regular files
+        if not file_path.is_file():
+            raise ValueError(f"Not a regular file: {filepath}")
+        
+        prompts = []
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                # Limit lines processed to prevent DoS
+                if line_num > 1000:
+                    raise ValueError("Too many lines in prompts file (max 1000)")
+                
+                line = line.strip()
+                # Skip empty lines and comments
+                if line and not line.startswith("#"):
+                    # Sanitize each prompt
+                    sanitized = line[:1000]  # Limit prompt length
+                    prompts.append(sanitized)
+        
+        if not prompts:
+            raise ValueError("No valid prompts found in file")
+        
+        return prompts
+        
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValueError(f"Failed to read prompts file '{filepath}': {e}") from e
 
 
 def main():
@@ -177,13 +217,32 @@ def main():
     # Build configuration
     prompts = []
     if args.prompts_file:
-        prompts = load_prompts_from_file(args.prompts_file)
+        try:
+            prompts = load_prompts_from_file(args.prompts_file)
+        except ValueError as e:
+            print(f"❌ Error loading prompts file: {e}")
+            sys.exit(1)
     elif args.continuous:
         prompts = DEFAULT_PROMPTS.copy()
     
+    # Validate repository format
+    if not args.repo or '/' not in args.repo:
+        print("❌ Invalid repository format. Expected 'owner/name'")
+        sys.exit(1)
+    
+    # Validate path
+    try:
+        local_path = Path(args.path).resolve()
+        if not local_path.exists():
+            print(f"❌ Path does not exist: {local_path}")
+            sys.exit(1)
+    except (OSError, RuntimeError) as e:
+        print(f"❌ Invalid path: {e}")
+        sys.exit(1)
+    
     config = ReleaseFlowConfig(
         repo=args.repo,
-        local_path=Path(args.path).resolve(),
+        local_path=local_path,
         prompts=prompts,
         git=GitConfig(
             main_branch=args.main_branch,

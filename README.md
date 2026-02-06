@@ -2,6 +2,18 @@
 
 A self-contained, pluggable framework for automated code improvement using GitHub Copilot SDK. This framework creates a continuous improvement loop that evaluates your codebase, implements changes, raises PRs, and optionally auto-merges them.
 
+## 🔒 Security
+
+This framework implements comprehensive security measures to protect against common vulnerabilities:
+
+- **Command Injection Prevention**: All subprocess calls use parameterized arguments
+- **Path Traversal Protection**: File paths are validated and sanitized
+- **Token Security**: GitHub tokens never exposed in logs or error messages
+- **Input Validation**: All user input sanitized with length limits
+- **Resource Limits**: Protection against DoS via large files or inputs
+
+See [SECURITY.md](SECURITY.md) for detailed security documentation.
+
 ## Features
 
 - **Automated Code Improvement**: Use Copilot to analyze and improve your codebase
@@ -326,6 +338,41 @@ release_flow/
 - GitHub token with `repo` and `workflow` permissions
 - GitHub Copilot subscription (for Copilot SDK)
 - Git installed locally
+
+## Security
+
+This framework has been hardened against common security vulnerabilities:
+
+- ✅ Command injection prevention
+- ✅ Path traversal protection  
+- ✅ Token exposure prevention
+- ✅ Input validation and sanitization
+- ✅ Resource exhaustion protection
+- ✅ Subprocess security
+
+For detailed security information, see [SECURITY.md](SECURITY.md).
+
+### Security Best Practices
+
+1. Store tokens securely using environment variables or GitHub CLI
+2. Only run on trusted repositories
+3. Enable branch protection and require code reviews
+4. Monitor PR creation activity
+5. Use prompts from trusted sources only
+
+## Testing
+
+Run security tests:
+
+```bash
+python test_security.py
+```
+
+Run syntax validation:
+
+```bash
+python -m py_compile *.py
+```
 
 ## License
 
