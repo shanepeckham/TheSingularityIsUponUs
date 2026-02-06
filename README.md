@@ -28,36 +28,33 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 
 ### Installation
 
-Copy the `release_flow` folder into your project, or install as a package:
+Clone the repository and install with uv:
 
 ```bash
-# Option 1: Copy the folder
-cp -r release_flow /path/to/your/project/
+git clone https://github.com/shanepeckham/TheSingularityIsUponUs.git
+cd TheSingularityIsUponUs
 
-# Option 2: Install as editable package
-cd release_flow
-pip install -e .
+# Install dependencies with uv
+uv sync
 ```
 
-### Dependencies
+Alternatively, install with pip:
 
 ```bash
-pip install PyGithub github-copilot-sdk python-dotenv
+pip install -e .
 ```
 
 ### Authentication
 
-Set your GitHub token:
+Set up your environment:
 
 ```bash
-# Option 1: Environment variable
-export GITHUB_TOKEN="your_token_here"
-
-# Option 2: .env file
-echo 'GITHUB_TOKEN=your_token_here' >> .env
-
-# Option 3: GitHub CLI (token auto-detected)
-gh auth login
+# Copy and edit .env file
+cp .env.example .env
+# Edit .env with your values:
+#   GITHUB_TOKEN=your_token_here
+#   GITHUB_REPO_OWNER=your-username
+#   GITHUB_REPO_NAME=your-repo
 ```
 
 ### Basic Usage
@@ -65,14 +62,15 @@ gh auth login
 #### Command Line
 
 ```bash
-# Single improvement
-python -m release_flow --repo owner/repo --prompt "Add error handling"
+# Create prompts.txt with your improvement prompts
+# Then run in continuous mode (auto-detects prompts.txt)
+uv run python -m release_flow --continuous --auto-merge
 
-# Continuous mode with auto-merge
-python -m release_flow --repo owner/repo --continuous --auto-merge
+# Or specify iterations
+uv run python -m release_flow --continuous -i 5 --auto-merge
 
-# Custom iterations and delay
-python -m release_flow --repo owner/repo --continuous -i 5 -d 1800 --auto-merge
+# Single improvement with inline prompt
+uv run python -m release_flow --prompt "Add error handling" --auto-merge
 ```
 
 #### Python API
