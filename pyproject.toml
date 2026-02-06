@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "release-flow"
+version = "1.0.0"
+description = "Automated release flow using GitHub Copilot SDK for continuous code improvement"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Release Flow Contributors"}
+]
+keywords = [
+    "github",
+    "copilot",
+    "automation",
+    "ci-cd",
+    "release",
+    "pull-request",
+    "code-improvement",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+
+dependencies = [
+    "PyGithub>=2.1.0",
+    "github-copilot-sdk>=0.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+release-flow = "release_flow.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/shanepeckham/multi-capability-agent"
+Documentation = "https://github.com/shanepeckham/multi-capability-agent#release-flow"
+Repository = "https://github.com/shanepeckham/multi-capability-agent"
+Issues = "https://github.com/shanepeckham/multi-capability-agent/issues"
+
+[tool.setuptools.packages.find]
+include = ["release_flow*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
