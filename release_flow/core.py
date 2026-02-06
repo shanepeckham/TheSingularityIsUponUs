@@ -717,6 +717,8 @@ Run ID: {self.run_id}
         """
         Wait for CI checks to complete.
         
+        Handles both GitHub Actions (check runs) and legacy commit statuses.
+        
         Args:
             pr_number: The PR number.
             
@@ -739,19 +741,61 @@ Run ID: {self.run_id}
                 continue
             
             last_commit = commits[-1]
+            
+            # Check GitHub Actions check runs first (modern CI)
+            try:
+                check_runs = list(last_commit.get_check_runs())
+                if check_runs:
+                    # Count by conclusion
+                    conclusions = [cr.conclusion for cr in check_runs]
+                    statuses = [cr.status for cr in check_runs]
+                    
+                    # Check if any are still running
+                    if any(s in ("queued", "in_progress") for s in statuses):
+                        running = sum(1 for s in statuses if s in ("queued", "in_progress"))
+                        print(f"   Check runs: {running} still running...")
+                        time.sleep(30)
+                        continue
+                    
+                    # All complete - check conclusions
+                    if all(c == "success" for c in conclusions):
+                        print("✅ All check runs passed")
+                        return True
+                    elif any(c in ("failure", "cancelled", "timed_out") for c in conclusions):
+                        failed = [cr.name for cr in check_runs if cr.conclusion in ("failure", "cancelled", "timed_out")]
+                        print(f"❌ Check runs failed: {', '.join(failed)}")
+                        return False
+                    elif all(c in ("success", "skipped", "neutral") for c in conclusions):
+                        print("✅ All check runs passed (some skipped)")
+                        return True
+            except GithubException as e:
+                # Token might not have checks permission - fall back to status API
+                if e.status == 403:
+                    logger.debug("No permission to read check runs, falling back to status API")
+                else:
+                    logger.warning(f"Error checking check runs: {e}")
+            
+            # Fall back to legacy commit status API
             combined_status = last_commit.get_combined_status()
+            total_statuses = combined_status.total_count
+            
+            if total_statuses == 0:
+                # No check runs AND no commit statuses = no CI configured
+                print("ℹ️ No CI checks configured, proceeding...")
+                return True
             
             if combined_status.state == "success":
-                print("✅ All checks passed")
+                print("✅ All status checks passed")
                 return True
             elif combined_status.state == "failure":
-                print("❌ Checks failed")
+                print("❌ Status checks failed")
                 return False
             elif combined_status.state == "pending":
-                print(f"   Status: pending - waiting...")
+                print(f"   Status checks: pending ({total_statuses} checks)...")
                 time.sleep(30)
             else:
-                print("ℹ️ No CI checks configured, proceeding...")
+                # Unknown state, proceed
+                print(f"ℹ️ Unknown status state '{combined_status.state}', proceeding...")
                 return True
         
         print("⚠️ Timeout waiting for checks")
