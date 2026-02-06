@@ -19,6 +19,13 @@ import os
 import sys
 from pathlib import Path
 
+from .security import (
+    SecurityError,
+    validate_path,
+    validate_repo_name,
+    sanitize_prompt,
+)
+
 # Load environment variables from .env if available
 try:
     from dotenv import load_dotenv
@@ -148,14 +155,56 @@ Environment Variables:
 
 
 def load_prompts_from_file(filepath: str) -> list[str]:
-    """Load prompts from a text file (one per line)."""
-    prompts = []
-    with open(filepath, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                prompts.append(line)
-    return prompts
+    """
+    Load prompts from a text file (one per line) with security validation.
+    
+    Args:
+        filepath: Path to the prompts file.
+        
+    Returns:
+        List of validated prompts.
+        
+    Raises:
+        SecurityError: If file path is invalid.
+        FileNotFoundError: If file doesn't exist.
+    """
+    try:
+        # Validate the file path
+        validated_path = validate_path(filepath)
+        
+        # Ensure file exists and is a file
+        if not validated_path.exists():
+            raise FileNotFoundError(f"Prompts file not found: {filepath}")
+        if not validated_path.is_file():
+            raise SecurityError(f"Path is not a file: {filepath}")
+        
+        # Check file size to prevent memory exhaustion
+        file_size = validated_path.stat().st_size
+        if file_size > 1024 * 1024:  # 1 MB limit
+            raise SecurityError("Prompts file too large (max 1MB)")
+        
+        prompts = []
+        with open(validated_path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    try:
+                        # Validate each prompt
+                        validated_prompt = sanitize_prompt(line)
+                        prompts.append(validated_prompt)
+                    except SecurityError as e:
+                        print(f"⚠️ Skipping invalid prompt on line {line_num}: {e}")
+        
+        if not prompts:
+            raise ValueError("No valid prompts found in file")
+        
+        return prompts
+    except SecurityError as e:
+        print(f"❌ Security error loading prompts: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error loading prompts file: {e}")
+        sys.exit(1)
 
 
 def main():
@@ -172,7 +221,30 @@ def main():
         ContinuousConfig,
         DEFAULT_PROMPTS,
     )
-    from .core import ReleaseFlow
+    from .core import ReleaseFlow, ReleaseFlowError
+    
+    # Validate and sanitize inputs
+    try:
+        # Validate repository name
+        repo = validate_repo_name(args.repo)
+        
+        # Validate and resolve local path
+        local_path = validate_path(args.path)
+        if not local_path.exists():
+            print(f"❌ Local path does not exist: {args.path}")
+            sys.exit(1)
+        
+        # Validate prompt if provided
+        if args.prompt:
+            try:
+                args.prompt = sanitize_prompt(args.prompt)
+            except SecurityError as e:
+                print(f"❌ Invalid prompt: {e}")
+                sys.exit(1)
+        
+    except SecurityError as e:
+        print(f"❌ Security validation failed: {e}")
+        sys.exit(1)
     
     # Build configuration
     prompts = []
@@ -182,8 +254,8 @@ def main():
         prompts = DEFAULT_PROMPTS.copy()
     
     config = ReleaseFlowConfig(
-        repo=args.repo,
-        local_path=Path(args.path).resolve(),
+        repo=repo,
+        local_path=local_path,
         prompts=prompts,
         git=GitConfig(
             main_branch=args.main_branch,
@@ -205,32 +277,39 @@ def main():
     # Initialize the release flow
     try:
         flow = ReleaseFlow(config)
-    except Exception as e:
+    except (ReleaseFlowError, Exception) as e:
         print(f"❌ Failed to initialize: {e}")
         sys.exit(1)
     
     # Run
-    if args.continuous:
-        results = asyncio.run(flow.run_continuous(
-            auto_merge=args.auto_merge,
-        ))
-        
-        # Exit with error if any iteration failed
-        if any(not r["success"] for r in results):
-            sys.exit(1)
-    else:
-        result = asyncio.run(flow.run_single_iteration(
-            prompt=args.prompt,
-            auto_merge=args.auto_merge,
-        ))
-        
-        if result["success"]:
-            print(f"\n✅ Release flow completed successfully!")
-            if result["pr_number"]:
-                print(f"   PR: https://github.com/{args.repo}/pull/{result['pr_number']}")
+    try:
+        if args.continuous:
+            results = asyncio.run(flow.run_continuous(
+                auto_merge=args.auto_merge,
+            ))
+            
+            # Exit with error if any iteration failed
+            if any(not r["success"] for r in results):
+                sys.exit(1)
         else:
-            print(f"\n❌ Release flow failed: {result['error']}")
-            sys.exit(1)
+            result = asyncio.run(flow.run_single_iteration(
+                prompt=args.prompt,
+                auto_merge=args.auto_merge,
+            ))
+            
+            if result["success"]:
+                print(f"\n✅ Release flow completed successfully!")
+                if result["pr_number"]:
+                    print(f"   PR: https://github.com/{repo}/pull/{result['pr_number']}")
+            else:
+                print(f"\n❌ Release flow failed: {result['error']}")
+                sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n⚠️ Operation cancelled by user")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .security import (
+    SecurityError,
+    sanitize_git_arg,
+    validate_path,
+    validate_repo_name,
+    validate_branch_name,
+    sanitize_prompt,
+    sanitize_commit_message,
+    redact_token,
+    validate_timeout,
+    safe_subprocess_args,
+    validate_package_name,
+)
+
 # Lazy imports for optional dependencies
 Github = None
 GithubException = None
@@ -29,11 +43,19 @@ def _ensure_github():
             Github = _Github
             GithubException = _GithubException
         except ImportError:
-            print("Installing PyGithub...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "PyGithub"])
-            from github import Github as _Github, GithubException as _GithubException
-            Github = _Github
-            GithubException = _GithubException
+            package_name = "PyGithub"
+            try:
+                validate_package_name(package_name)
+                print(f"Installing {package_name}...")
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "--", package_name],
+                    timeout=300
+                )
+                from github import Github as _Github, GithubException as _GithubException
+                Github = _Github
+                GithubException = _GithubException
+            except Exception as e:
+                raise ReleaseFlowError(f"Failed to install {package_name}: {e}")
 
 
 def _ensure_copilot():
@@ -44,10 +66,18 @@ def _ensure_copilot():
             from copilot.client import CopilotClient as _CopilotClient
             CopilotClient = _CopilotClient
         except ImportError:
-            print("Installing github-copilot-sdk...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "github-copilot-sdk"])
-            from copilot.client import CopilotClient as _CopilotClient
-            CopilotClient = _CopilotClient
+            package_name = "github-copilot-sdk"
+            try:
+                validate_package_name(package_name)
+                print(f"Installing {package_name}...")
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "--", package_name],
+                    timeout=300
+                )
+                from copilot.client import CopilotClient as _CopilotClient
+                CopilotClient = _CopilotClient
+            except Exception as e:
+                raise ReleaseFlowError(f"Failed to install {package_name}: {e}")
 
 
 class ReleaseFlowError(Exception):
@@ -103,8 +133,13 @@ class ReleaseFlow:
             config = ReleaseFlowConfig(**config)
         
         self.config = config
-        self.local_path = config.local_path
-        self.repo = config.repo
+        
+        # Validate and sanitize configuration
+        try:
+            self.local_path = validate_path(config.local_path)
+            self.repo = validate_repo_name(config.repo)
+        except SecurityError as e:
+            raise ReleaseFlowError(f"Invalid configuration: {e}")
         
         # Get GitHub token
         self.github_token = config.github_token or os.environ.get("GITHUB_TOKEN")
@@ -119,8 +154,13 @@ class ReleaseFlow:
         
         # Initialize GitHub client
         _ensure_github()
-        self.github = Github(self.github_token)
-        self.gh_repo = self.github.get_repo(self.repo)
+        try:
+            self.github = Github(self.github_token)
+            self.gh_repo = self.github.get_repo(self.repo)
+        except Exception as e:
+            # Redact token from error messages
+            error_msg = redact_token(str(e), self.github_token)
+            raise ReleaseFlowError(f"Failed to initialize GitHub client: {error_msg}")
         
         # Copilot client (initialized lazily)
         self.copilot_client = None
@@ -139,10 +179,15 @@ class ReleaseFlow:
                 ["gh", "auth", "token"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=30
             )
-            return result.stdout.strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
+            token = result.stdout.strip()
+            # Basic validation of token format
+            if token and len(token) > 10:
+                return token
+            return None
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
             return None
     
     async def initialize_copilot(self):
@@ -161,7 +206,7 @@ class ReleaseFlow:
     
     def run_git(self, *args, check: bool = True) -> subprocess.CompletedProcess:
         """
-        Run a git command in the local repo.
+        Run a git command in the local repo with security validation.
         
         Args:
             *args: Git command arguments.
@@ -169,14 +214,33 @@ class ReleaseFlow:
             
         Returns:
             CompletedProcess instance.
+            
+        Raises:
+            SecurityError: If arguments contain potentially dangerous content.
         """
-        return subprocess.run(
-            ["git", *args],
-            cwd=self.local_path,
-            capture_output=True,
-            text=True,
-            check=check
-        )
+        # Validate all arguments
+        sanitized_args = []
+        for arg in args:
+            try:
+                sanitized_args.append(sanitize_git_arg(str(arg)))
+            except SecurityError as e:
+                raise ReleaseFlowError(f"Insecure git argument detected: {e}")
+        
+        try:
+            return subprocess.run(
+                ["git"] + sanitized_args,
+                cwd=self.local_path,
+                capture_output=True,
+                text=True,
+                check=check,
+                timeout=300  # 5 minute timeout for git operations
+            )
+        except subprocess.TimeoutExpired:
+            raise ReleaseFlowError("Git operation timed out")
+        except Exception as e:
+            # Redact any tokens that might appear in error messages
+            error_msg = redact_token(str(e), self.github_token)
+            raise ReleaseFlowError(f"Git operation failed: {error_msg}")
     
     def ensure_clean_state(self):
         """Ensure the repo is in a clean state on the main branch."""
@@ -208,9 +272,17 @@ class ReleaseFlow:
             The branch name.
         """
         prefix = self.config.git.branch_prefix
+        # Sanitize prompt for use in branch name
         words = prompt.lower().split()[:4]
+        # Only include alphanumeric words
         branch_suffix = "-".join(w for w in words if w.isalnum())[:30]
         branch_name = f"{prefix}/{self.run_id}-{branch_suffix}"
+        
+        # Validate the generated branch name
+        try:
+            branch_name = validate_branch_name(branch_name)
+        except SecurityError as e:
+            raise ReleaseFlowError(f"Invalid branch name: {e}")
         
         print(f"🌿 Creating branch: {branch_name}")
         self.run_git("checkout", "-b", branch_name)
@@ -227,7 +299,13 @@ class ReleaseFlow:
         Returns:
             Dict with files_changed, summary, and recommendations.
         """
-        print(f"\n🤖 Evaluating codebase with prompt:\n   '{prompt}'")
+        # Sanitize the prompt
+        try:
+            prompt = sanitize_prompt(prompt)
+        except SecurityError as e:
+            raise ReleaseFlowError(f"Invalid prompt: {e}")
+        
+        print(f"\n🤖 Evaluating codebase with prompt:\n   '{prompt[:100]}{'...' if len(prompt) > 100 else ''}'")
         
         full_prompt = f"""
 You are analyzing and improving the codebase at {self.local_path}.
@@ -250,13 +328,16 @@ After making changes, provide a summary of:
 """
         
         try:
+            # Validate timeout
+            timeout = validate_timeout(self.config.copilot.timeout, 1, 3600)
+            
             session = await self.copilot_client.create_session({
                 "working_directory": str(self.local_path),
             })
             
             response = await session.send_and_wait(
                 {"prompt": full_prompt},
-                timeout=self.config.copilot.timeout
+                timeout=timeout
             )
             
             await session.destroy()
@@ -272,11 +353,21 @@ After making changes, provide a summary of:
             elif response:
                 response_content = str(response)
             
+            # Redact any tokens from response
+            response_content = redact_token(response_content, self.github_token)
+            
             result = self.run_git("status", "--porcelain")
-            changed_files = [
-                line.split()[-1] for line in result.stdout.strip().split("\n")
-                if line.strip()
-            ]
+            changed_files = []
+            if result.stdout.strip():
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        # Validate that changed file is within local_path
+                        file_path = line.split()[-1]
+                        try:
+                            validate_path(self.local_path / file_path, self.local_path)
+                            changed_files.append(file_path)
+                        except SecurityError:
+                            print(f"⚠️ Skipping file outside repository: {file_path}")
             
             return {
                 "files_changed": changed_files,
@@ -285,43 +376,66 @@ After making changes, provide a summary of:
             }
             
         except Exception as e:
-            print(f"⚠️ Copilot evaluation failed: {e}")
+            error_msg = redact_token(str(e), self.github_token)
+            print(f"⚠️ Copilot evaluation failed: {error_msg}")
             if self.config.copilot.fallback_to_cli:
                 return await self._fallback_copilot_cli(prompt)
-            raise
+            raise ReleaseFlowError(error_msg)
     
     async def _fallback_copilot_cli(self, prompt: str) -> dict:
         """Fallback method using Copilot CLI directly."""
         print("🔄 Using Copilot CLI fallback...")
         
         try:
+            # Validate timeout
+            timeout = validate_timeout(self.config.copilot.timeout, 1, 3600)
+            
+            # Use list format for subprocess to prevent shell injection
+            cmd = [
+                self.config.copilot.cli_command,
+                "--non-interactive",
+                "-m",
+                prompt
+            ]
+            
             result = subprocess.run(
-                [self.config.copilot.cli_command, "--non-interactive", "-m", prompt],
+                cmd,
                 cwd=self.local_path,
                 capture_output=True,
                 text=True,
-                timeout=self.config.copilot.timeout,
+                timeout=timeout,
             )
             
             git_result = self.run_git("status", "--porcelain")
-            changed_files = [
-                line.split()[-1] for line in git_result.stdout.strip().split("\n")
-                if line.strip()
-            ]
+            changed_files = []
+            if git_result.stdout.strip():
+                for line in git_result.stdout.strip().split("\n"):
+                    if line.strip():
+                        file_path = line.split()[-1]
+                        try:
+                            validate_path(self.local_path / file_path, self.local_path)
+                            changed_files.append(file_path)
+                        except SecurityError:
+                            print(f"⚠️ Skipping file outside repository: {file_path}")
+            
+            output = redact_token(result.stdout, self.github_token)
             
             return {
                 "files_changed": changed_files,
-                "summary": result.stdout,
+                "summary": output,
                 "recommendations": prompt,
             }
             
         except subprocess.TimeoutExpired:
-            raise ReleaseFlowError(f"Copilot CLI timed out after {self.config.copilot.timeout}s")
+            raise ReleaseFlowError(f"Copilot CLI timed out after {timeout}s")
         except FileNotFoundError:
             raise ReleaseFlowError(
                 f"Copilot CLI '{self.config.copilot.cli_command}' not found. "
                 "Install from: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli"
             )
+        except Exception as e:
+            error_msg = redact_token(str(e), self.github_token)
+            raise ReleaseFlowError(f"CLI fallback failed: {error_msg}")
     
     def commit_changes(self, prompt: str, files_changed: list) -> bool:
         """
@@ -343,7 +457,9 @@ After making changes, provide a summary of:
         self.run_git("add", "-A")
         
         prefix = self.config.git.commit_prefix
-        commit_msg = f"""{prefix} {prompt[:50]}{'...' if len(prompt) > 50 else ''}
+        prompt_snippet = prompt[:50] + ('...' if len(prompt) > 50 else '')
+        
+        commit_msg = f"""{prefix} {prompt_snippet}
 
 Automated improvement by Release Flow.
 
@@ -353,6 +469,12 @@ Files changed:
 
 Run ID: {self.run_id}
 """
+        
+        # Sanitize commit message
+        try:
+            commit_msg = sanitize_commit_message(commit_msg)
+        except SecurityError as e:
+            raise ReleaseFlowError(f"Invalid commit message: {e}")
         
         self.run_git("commit", "-m", commit_msg)
         print("✅ Changes committed")
@@ -595,8 +717,10 @@ Run ID: {self.run_id}
             result["success"] = True
             
         except Exception as e:
-            result["error"] = str(e)
-            print(f"❌ Error: {e}")
+            # Redact tokens from error messages
+            error_msg = redact_token(str(e), self.github_token)
+            result["error"] = error_msg
+            print(f"❌ Error: {error_msg}")
             
             if self.config.on_error:
                 should_continue = self.config.on_error(e)

@@ -327,6 +327,24 @@ release_flow/
 - GitHub Copilot subscription (for Copilot SDK)
 - Git installed locally
 
+## Security
+
+Release Flow implements multiple security controls:
+
+- **Input validation**: All user inputs are validated and sanitized
+- **Command injection prevention**: Subprocess calls use secure practices
+- **Token protection**: Automatic redaction of tokens from logs and errors
+- **Path traversal protection**: File operations are restricted to the repository
+- **Timeout controls**: All operations have reasonable timeout limits
+
+For detailed security information, see [SECURITY.md](SECURITY.md).
+
+**Security best practices:**
+- Never commit `.env` files or tokens to version control
+- Use fine-grained tokens with minimum required permissions
+- Review PRs before merging, especially with `auto_merge` enabled
+- Run only on repositories you trust and have permission to modify
+
 ## License
 
 MIT License - see LICENSE file for details.
@@ -334,3 +352,5 @@ MIT License - see LICENSE file for details.
 ## Contributing
 
 Contributions welcome! Please open an issue or PR.
+
+**Security issues**: Please report security vulnerabilities privately to the maintainers rather than opening public issues.

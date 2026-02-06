@@ -41,6 +41,10 @@ from .core import (
     ReleaseFlowError,
 )
 
+from .security import (
+    SecurityError,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -54,4 +58,6 @@ __all__ = [
     # Core classes
     "ReleaseFlow",
     "ReleaseFlowError",
+    # Security
+    "SecurityError",
 ]
