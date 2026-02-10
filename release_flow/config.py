@@ -121,6 +121,13 @@ class OperatorConfig:
 
 @dataclass
 class ReleaseFlowConfig:
+    """Main configuration for the Release Flow framework.
+
+    ⚠️  EXPERIMENTAL — This framework uses unmanaged AI to autonomously
+    modify code, create PRs, and optionally merge them. AI-generated
+    changes may introduce bugs or security vulnerabilities. Always
+    review PRs before merging in production repositories.
+    """
     """
     Main configuration for the Release Flow framework.
     

@@ -1,5 +1,14 @@
 # Release Flow Framework
 
+> **⚠️ Experimental — Use with caution**
+>
+> This framework uses **unmanaged AI** to autonomously modify code, create branches,
+> open pull requests, and optionally merge them — **without human approval in the loop**
+> when auto-merge is enabled. AI-generated changes may introduce bugs, security
+> vulnerabilities, or unintended behaviour. **Always review PRs before merging in
+> production repositories.** Run in a sandboxed or non-critical repo until you are
+> confident in the workflow.
+
 A self-contained, pluggable framework for automated code improvement using GitHub Copilot SDK. This framework creates a continuous improvement loop that evaluates your codebase, implements changes, raises PRs, and optionally auto-merges them.
 
 An optional **Operator** (a second LLM acting as product owner and judge) can be enabled to assess the codebase, define a roadmap, generate prompts, and evaluate the agent's work — all using a different model for independent oversight.

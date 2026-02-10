@@ -35,7 +35,13 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
         prog="release_flow",
-        description="Automated Release Flow using GitHub Copilot SDK",
+        description=(
+            "Automated Release Flow using GitHub Copilot SDK.\n\n"
+            "⚠️  EXPERIMENTAL — This tool uses unmanaged AI to autonomously modify\n"
+            "code, create PRs, and optionally merge them. AI-generated changes may\n"
+            "introduce bugs or security issues. Always review PRs before merging\n"
+            "in production repositories."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -344,6 +350,14 @@ def main():
             update_prompts_after_run=operator_enabled,
             stop_on_fail_verdict=args.stop_on_fail_verdict,
         ),
+    )
+    
+    # Print experimental warning
+    print(
+        "\n⚠️  EXPERIMENTAL: This tool uses unmanaged AI to autonomously modify "
+        "code and create PRs.\n"
+        "   AI-generated changes may introduce bugs or security vulnerabilities.\n"
+        "   Always review changes before merging in production repositories.\n"
     )
     
     # Initialize the release flow
