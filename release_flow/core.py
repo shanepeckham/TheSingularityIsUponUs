@@ -3,6 +3,12 @@ Core Release Flow implementation.
 
 This module contains the main ReleaseFlow class that orchestrates
 the automated release process using GitHub Copilot SDK.
+
+⚠️  EXPERIMENTAL — This module uses unmanaged AI to autonomously modify
+code, create branches, open pull requests, and optionally merge them.
+AI-generated changes may introduce bugs, security vulnerabilities, or
+unintended behaviour. Always review PRs before merging in production
+repositories.
 """
 
 import asyncio
