@@ -67,6 +67,12 @@ Environment Variables:
         action="store_true",
         help="Run in continuous mode (uses prompts.txt by default)",
     )
+    mode_group.add_argument(
+        "--assess",
+        action="store_true",
+        help="Run Operator assessment only (no agent work). "
+             "Analyses the codebase, defines a roadmap, and writes prompts.txt.",
+    )
     
     # Optional arguments
     parser.add_argument(
@@ -144,6 +150,42 @@ Environment Variables:
         help="Stop continuous mode if an iteration fails",
     )
     
+    # --- Operator (LLM-as-judge / product owner) options ---
+    operator_group = parser.add_argument_group(
+        "Operator options",
+        "Configure the Operator: a second LLM that acts as product owner and judge.",
+    )
+    operator_group.add_argument(
+        "--with-operator",
+        action="store_true",
+        help="Enable the Operator (LLM-as-judge). "
+             "The Operator assesses the codebase, generates prompts, "
+             "and judges each iteration's changes.",
+    )
+    operator_group.add_argument(
+        "--operator-model",
+        type=str,
+        default="claude-3.5-sonnet",
+        help="Model for the Operator (must differ from --model). "
+             "Default: claude-3.5-sonnet",
+    )
+    operator_group.add_argument(
+        "--operator-timeout",
+        type=int,
+        default=300,
+        help="Timeout for Operator LLM calls in seconds (default: 300)",
+    )
+    operator_group.add_argument(
+        "--no-operator-judge",
+        action="store_true",
+        help="Disable post-iteration judging by the Operator",
+    )
+    operator_group.add_argument(
+        "--stop-on-fail-verdict",
+        action="store_true",
+        help="Stop continuous mode if the Operator gives a FAIL verdict",
+    )
+    
     parser.add_argument(
         "--version", "-v",
         action="version",
@@ -216,6 +258,7 @@ def main():
         CopilotConfig,
         PRConfig,
         ContinuousConfig,
+        OperatorConfig,
     )
     from .core import ReleaseFlow
     
@@ -250,13 +293,13 @@ def main():
     repo = f"{repo_owner}/{repo_name}"
     
     # Determine mode
-    if not args.prompt and not args.continuous:
+    if not args.prompt and not args.continuous and not args.assess:
         # Default to continuous mode if prompts.txt exists
         if prompts:
             args.continuous = True
             print("ℹ️  Running in continuous mode (prompts.txt found)")
         else:
-            print("❌ Error: Specify --prompt or --continuous, or create prompts.txt")
+            print("❌ Error: Specify --prompt, --continuous, or --assess, or create prompts.txt")
             sys.exit(1)
     
     # Validate path
@@ -268,6 +311,9 @@ def main():
     except (OSError, RuntimeError) as e:
         print(f"❌ Invalid path: {e}")
         sys.exit(1)
+    
+    # Enable operator if --assess or --with-operator
+    operator_enabled = args.with_operator or args.assess
     
     config = ReleaseFlowConfig(
         repo=repo,
@@ -289,6 +335,15 @@ def main():
             delay_between_runs=args.delay,
             stop_on_failure=args.stop_on_failure,
         ),
+        operator=OperatorConfig(
+            enabled=operator_enabled,
+            model=args.operator_model,
+            timeout=args.operator_timeout,
+            judge_after_iteration=not args.no_operator_judge,
+            generate_prompts_before_run=operator_enabled,
+            update_prompts_after_run=operator_enabled,
+            stop_on_fail_verdict=args.stop_on_fail_verdict,
+        ),
     )
     
     # Initialize the release flow
@@ -299,7 +354,29 @@ def main():
         sys.exit(1)
     
     # Run
-    if args.continuous:
+    if args.assess:
+        # Operator-only mode: assess, roadmap, generate prompts
+        from .judge import Operator
+        operator = Operator(config)
+        result = asyncio.run(operator.run_full_assessment(update_prompts=True))
+        
+        print(f"\n✅ Operator assessment complete")
+        print(f"   Prompts written to: {result.get('prompts_file', 'N/A')}")
+        print(f"   Total prompts generated: {len(result.get('prompts', []))}")
+        
+        if result.get("assessment"):
+            print(f"\n{'=' * 60}")
+            print("📋 ASSESSMENT SUMMARY")
+            print(f"{'=' * 60}")
+            print(result["assessment"][:2000])
+        
+        if result.get("roadmap"):
+            print(f"\n{'=' * 60}")
+            print("🗺️  ROADMAP")
+            print(f"{'=' * 60}")
+            print(result["roadmap"][:2000])
+    
+    elif args.continuous:
         results = asyncio.run(flow.run_continuous(
             auto_merge=args.auto_merge,
         ))

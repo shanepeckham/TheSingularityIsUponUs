@@ -6,14 +6,12 @@ import pytest
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from config import (
+from release_flow.config import (
     GitConfig,
     CopilotConfig,
     PRConfig,
     ContinuousConfig,
+    OperatorConfig,
     ReleaseFlowConfig,
     DEFAULT_PROMPTS,
 )
@@ -138,6 +136,7 @@ class TestReleaseFlowConfig:
         assert isinstance(config.copilot, CopilotConfig)
         assert isinstance(config.pr, PRConfig)
         assert isinstance(config.continuous, ContinuousConfig)
+        assert isinstance(config.operator, OperatorConfig)
     
     def test_invalid_repo_format(self):
         """Test invalid repository format validation."""
@@ -260,6 +259,76 @@ class TestDefaultPrompts:
         assert "test" in prompts_text
         assert "error" in prompts_text
         assert "documentation" in prompts_text
+
+
+class TestOperatorConfig:
+    """Tests for OperatorConfig dataclass."""
+
+    def test_default_values(self):
+        """Test default Operator configuration values."""
+        config = OperatorConfig()
+        assert config.enabled is False
+        assert config.model == "claude-3.5-sonnet"
+        assert config.timeout == 300
+        assert config.judge_after_iteration is True
+        assert config.generate_prompts_before_run is True
+        assert config.update_prompts_after_run is True
+        assert config.prompts_file == "prompts.txt"
+        assert config.stop_on_fail_verdict is False
+
+    def test_custom_values(self):
+        """Test custom Operator configuration values."""
+        config = OperatorConfig(
+            enabled=True,
+            model="gpt-4o",
+            timeout=600,
+            judge_after_iteration=False,
+            stop_on_fail_verdict=True,
+        )
+        assert config.enabled is True
+        assert config.model == "gpt-4o"
+        assert config.timeout == 600
+        assert config.judge_after_iteration is False
+        assert config.stop_on_fail_verdict is True
+
+    def test_operator_in_release_flow_config(self):
+        """Test OperatorConfig integration in ReleaseFlowConfig."""
+        config = ReleaseFlowConfig(
+            repo="owner/repo",
+            local_path=Path.cwd(),
+            operator=OperatorConfig(enabled=True, model="claude-3.5-sonnet"),
+        )
+        assert config.operator.enabled is True
+        assert config.operator.model == "claude-3.5-sonnet"
+
+    def test_model_separation_enforced(self):
+        """Test that same model for agent and operator is rejected when enabled."""
+        with pytest.raises(ValueError, match="Operator model must differ"):
+            ReleaseFlowConfig(
+                repo="owner/repo",
+                local_path=Path.cwd(),
+                copilot=CopilotConfig(model="gpt-4o"),
+                operator=OperatorConfig(enabled=True, model="gpt-4o"),
+            )
+
+    def test_model_separation_not_enforced_when_disabled(self):
+        """Test that same model is allowed when operator is disabled."""
+        config = ReleaseFlowConfig(
+            repo="owner/repo",
+            local_path=Path.cwd(),
+            copilot=CopilotConfig(model="gpt-4o"),
+            operator=OperatorConfig(enabled=False, model="gpt-4o"),
+        )
+        assert config.operator.enabled is False
+
+    def test_operator_timeout_validation(self):
+        """Test operator timeout must be positive."""
+        with pytest.raises(ValueError, match="Operator timeout must be positive"):
+            ReleaseFlowConfig(
+                repo="owner/repo",
+                local_path=Path.cwd(),
+                operator=OperatorConfig(timeout=-1),
+            )
 
 
 if __name__ == "__main__":

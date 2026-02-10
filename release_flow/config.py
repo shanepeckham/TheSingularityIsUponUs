@@ -85,6 +85,41 @@ class ContinuousConfig:
 
 
 @dataclass
+class OperatorConfig:
+    """Configuration for the Operator (LLM-as-judge / product owner).
+
+    The Operator uses a *different* model from the self-improving agent to
+    provide independent assessment, roadmap definition, and change evaluation.
+    """
+
+    enabled: bool = False
+    """Whether the Operator is active. When False the agent runs unsupervised."""
+
+    model: Optional[str] = "claude-3.5-sonnet"
+    """Model for the Operator. MUST differ from CopilotConfig.model."""
+
+    timeout: int = 300
+    """Timeout in seconds for Operator LLM calls."""
+
+    judge_after_iteration: bool = True
+    """When True, the Operator judges every iteration's changes."""
+
+    generate_prompts_before_run: bool = True
+    """When True, the Operator runs a full assessment and writes prompts.txt
+    before the continuous run begins."""
+
+    update_prompts_after_run: bool = True
+    """When True, the Operator refreshes prompts.txt after all iterations
+    complete, incorporating follow-up items from judging."""
+
+    prompts_file: str = "prompts.txt"
+    """Path to the prompts file the Operator manages."""
+
+    stop_on_fail_verdict: bool = False
+    """When True, stop the continuous run if the Operator gives a FAIL verdict."""
+
+
+@dataclass
 class ReleaseFlowConfig:
     """
     Main configuration for the Release Flow framework.
@@ -134,6 +169,9 @@ class ReleaseFlowConfig:
     continuous: ContinuousConfig = field(default_factory=ContinuousConfig)
     """Continuous mode configuration."""
     
+    operator: OperatorConfig = field(default_factory=OperatorConfig)
+    """Operator (LLM-as-judge / product owner) configuration."""
+    
     # Callbacks (for custom integrations)
     on_iteration_start: Optional[Callable[[int, str], None]] = None
     """Callback called at the start of each iteration: (iteration, prompt)."""
@@ -175,6 +213,19 @@ class ReleaseFlowConfig:
         
         if hasattr(self.continuous, 'delay_between_runs') and self.continuous.delay_between_runs < 0:
             raise ValueError("Delay between runs cannot be negative")
+        
+        # Validate operator config
+        if hasattr(self.operator, 'timeout') and self.operator.timeout <= 0:
+            raise ValueError("Operator timeout must be positive")
+        
+        # Enforce model separation when operator is enabled
+        if self.operator.enabled and self.copilot.model and self.operator.model:
+            if self.copilot.model == self.operator.model:
+                raise ValueError(
+                    f"Operator model must differ from agent model. "
+                    f"Both are set to '{self.copilot.model}'. "
+                    f"Use a different model for independent evaluation."
+                )
 
 
 # Default prompts for code improvement

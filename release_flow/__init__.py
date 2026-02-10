@@ -33,6 +33,7 @@ from .config import (
     CopilotConfig,
     PRConfig,
     ContinuousConfig,
+    OperatorConfig,
     DEFAULT_PROMPTS,
 )
 
@@ -45,6 +46,20 @@ from .core import (
     PROperationError,
 )
 
+# Operator imports are lazy — the module is only loaded when explicitly accessed.
+# This keeps the operator fully optional at runtime.
+
+
+def __getattr__(name: str):
+    """Lazy-load Operator and OperatorError on first access."""
+    if name in ("Operator", "OperatorError"):
+        from .judge import Operator, OperatorError  # noqa: F811
+        globals()["Operator"] = Operator
+        globals()["OperatorError"] = OperatorError
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     # Version
     "__version__",
@@ -54,6 +69,7 @@ __all__ = [
     "CopilotConfig",
     "PRConfig",
     "ContinuousConfig",
+    "OperatorConfig",
     "DEFAULT_PROMPTS",
     # Core classes
     "ReleaseFlow",
@@ -62,4 +78,7 @@ __all__ = [
     "GitOperationError",
     "CopilotError",
     "PROperationError",
+    # Operator (lazy-loaded)
+    "Operator",
+    "OperatorError",
 ]

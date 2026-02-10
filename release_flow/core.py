@@ -332,6 +332,16 @@ class ReleaseFlow:
         if not config.prompts:
             config.prompts = DEFAULT_PROMPTS.copy()
         
+        # Initialise Operator (LLM-as-judge / product owner) if enabled
+        self.operator = None
+        if config.operator.enabled:
+            from .judge import Operator
+            self.operator = Operator(config)
+            logger.info(
+                f"Operator enabled (model: {config.operator.model or 'default'}, "
+                f"agent model: {config.copilot.model or 'default'})"
+            )
+        
         logger.info(f"Initialized ReleaseFlow for repository: {self.repo}")
     
     def _get_gh_token(self) -> Optional[str]:
@@ -936,6 +946,29 @@ Run ID: {self.run_id}
         finally:
             await self.close_copilot()
         
+        # --- Operator post-iteration judging ---
+        if (
+            self.operator
+            and self.config.operator.judge_after_iteration
+            and result["success"]
+        ):
+            try:
+                judgement = await self.operator.post_iteration_review(result)
+                result["operator_verdict"] = judgement.get("verdict", "UNKNOWN")
+                result["operator_evaluation"] = judgement.get("evaluation", "")
+                result["operator_follow_up"] = judgement.get("follow_up", [])
+
+                if (
+                    judgement.get("verdict") == "FAIL"
+                    and self.config.operator.stop_on_fail_verdict
+                ):
+                    print("⛔ Operator gave FAIL verdict — stopping.")
+                    result["success"] = False
+            except Exception as e:
+                logger.warning(f"Operator post-iteration review failed: {e}")
+                result["operator_verdict"] = "ERROR"
+                result["operator_evaluation"] = str(e)
+        
         return result
     
     async def run_continuous(
@@ -968,6 +1001,23 @@ Run ID: {self.run_id}
         
         results = []
         
+        # --- Operator pre-run: assess codebase and generate prompts ---
+        if self.operator and self.config.operator.generate_prompts_before_run:
+            try:
+                print("\n" + "=" * 60)
+                print("🔍 OPERATOR PRE-RUN ASSESSMENT")
+                print("=" * 60 + "\n")
+                operator_result = await self.operator.run_full_assessment(
+                    update_prompts=True
+                )
+                # Use operator-generated prompts for this run
+                if operator_result.get("prompts"):
+                    prompts = operator_result["prompts"]
+                    print(f"📋 Operator provided {len(prompts)} prioritised prompts")
+            except Exception as e:
+                logger.warning(f"Operator pre-run assessment failed: {e}")
+                print(f"⚠️  Operator assessment failed, using existing prompts: {e}")
+        
         for iteration in range(max_iterations):
             prompt = prompts[iteration % len(prompts)]
             
@@ -998,6 +1048,23 @@ Run ID: {self.run_id}
                 await asyncio.sleep(delay)
         
         self._print_summary(results)
+        
+        # --- Operator post-run: refresh prompts for the next cycle ---
+        if self.operator and self.config.operator.update_prompts_after_run:
+            try:
+                # Collect follow-up items from judging
+                follow_ups = []
+                for r in results:
+                    follow_ups.extend(r.get("operator_follow_up", []))
+                
+                if follow_ups:
+                    print(f"\n📋 Operator: Appending {len(follow_ups)} follow-up prompts")
+                    self.operator.update_prompts_file(
+                        follow_ups, append=True
+                    )
+            except Exception as e:
+                logger.warning(f"Operator post-run prompt update failed: {e}")
+        
         return results
     
     def _print_summary(self, results: list[dict]):
