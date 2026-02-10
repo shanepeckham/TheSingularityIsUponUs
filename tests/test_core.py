@@ -8,10 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
 import asyncio
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core import (
+from release_flow.core import (
     _sanitize_branch_name,
     _sanitize_input,
     _validate_repo_name,
@@ -24,7 +21,7 @@ from core import (
     PROperationError,
     copilot_session,
 )
-from config import ReleaseFlowConfig
+from release_flow.config import ReleaseFlowConfig
 
 
 class TestSanitization:
@@ -156,8 +153,8 @@ class TestValidation:
 class TestReleaseFlowInit:
     """Tests for ReleaseFlow initialization."""
     
-    @patch('core.Github')
-    @patch('core._ensure_github')
+    @patch('release_flow.core.Github')
+    @patch('release_flow.core._ensure_github')
     @patch.dict('os.environ', {'GITHUB_TOKEN': 'test_token'}, clear=True)
     def test_init_with_valid_config(self, mock_ensure, mock_github_class):
         """Test initialization with valid configuration."""
@@ -201,8 +198,8 @@ class TestReleaseFlowInit:
         with pytest.raises(ConfigurationError, match="GITHUB_TOKEN not set"):
             ReleaseFlow(config)
     
-    @patch('core.Github')
-    @patch('core._ensure_github')
+    @patch('release_flow.core.Github')
+    @patch('release_flow.core._ensure_github')
     @patch.dict('os.environ', {'GITHUB_TOKEN': 'test_token'}, clear=True)
     def test_init_with_dict_config(self, mock_ensure, mock_github_class):
         """Test initialization with dictionary configuration."""
