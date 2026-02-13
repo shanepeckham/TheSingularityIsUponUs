@@ -1023,7 +1023,12 @@ Run ID: {self.run_id}
         results = []
         
         # --- Operator pre-run: assess codebase and generate prompts ---
-        if self.operator and self.config.operator.generate_prompts_before_run:
+        # Skip if prompts were already loaded (e.g. from a prior --assess run)
+        if (
+            self.operator
+            and self.config.operator.generate_prompts_before_run
+            and not prompts
+        ):
             try:
                 print("\n" + "=" * 60)
                 print("🔍 OPERATOR PRE-RUN ASSESSMENT")
