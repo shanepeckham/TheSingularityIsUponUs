@@ -120,6 +120,11 @@ class OperatorConfig:
     roadmap.md, generate_prompts.md, judge.md). When None, built-in
     defaults are used."""
 
+    constitution_file: Optional[str] = None
+    """Path to a constitution file containing first principles that the
+    Operator must always adhere to. The contents are prepended to every
+    prompt the Operator sends. When None, no constitution is applied."""
+
     stop_on_fail_verdict: bool = False
     """When True, stop the continuous run if the Operator gives a FAIL verdict."""
 

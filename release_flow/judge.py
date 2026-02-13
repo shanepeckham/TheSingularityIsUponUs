@@ -214,6 +214,10 @@ Return your evaluation as structured text.
         # Load prompt templates from files when configured
         self._load_prompt_templates()
 
+        # Load constitution (first principles)
+        self._constitution: str = ""
+        self._load_constitution()
+
         logger.info(
             f"Operator initialised (model: {operator_model or 'default'}, "
             f"agent model: {agent_model or 'default'})")
@@ -285,6 +289,43 @@ Return your evaluation as structured text.
                 f"No prompt files found in {prompts_dir} — using built-in defaults"
             )
 
+    def _load_constitution(self) -> None:
+        """Load the constitution file if configured.
+
+        The constitution contains first principles that the Operator must
+        always adhere to.  Its contents are prepended to every prompt.
+        """
+        constitution_setting = self.operator_config.constitution_file
+        if not constitution_setting:
+            return
+
+        filepath = Path(constitution_setting)
+        if not filepath.is_absolute():
+            filepath = self.local_path / filepath
+        filepath = filepath.resolve()
+
+        # Security: must be inside project tree
+        try:
+            filepath.relative_to(self.local_path)
+        except ValueError:
+            raise OperatorError(
+                f"Constitution file must be inside the project: "
+                f"{filepath} is outside {self.local_path}"
+            )
+
+        if not filepath.is_file():
+            raise OperatorError(f"Constitution file not found: {filepath}")
+
+        # Security: reject files > 64 KB
+        if filepath.stat().st_size > 65_536:
+            raise OperatorError(
+                f"Constitution file too large (max 64 KB): {filepath}"
+            )
+
+        self._constitution = filepath.read_text(encoding="utf-8").strip()
+        print(f"📜 Loaded constitution from {filepath.name}")
+        logger.info(f"Constitution loaded ({len(self._constitution)} chars)")
+
     # ------------------------------------------------------------------ #
     # Copilot SDK lifecycle
     # ------------------------------------------------------------------ #
@@ -316,6 +357,9 @@ Return your evaluation as structured text.
         """
         Send a prompt to the Operator's LLM and return the response text.
 
+        If a constitution is loaded, it is prepended to every prompt so
+        that the Operator's first principles are always in context.
+
         Args:
             prompt: The fully-rendered prompt to send.
 
@@ -323,6 +367,14 @@ Return your evaluation as structured text.
             The LLM response as a string.
         """
         await self._init_copilot()
+
+        # Prepend constitution when available
+        if self._constitution:
+            prompt = (
+                f"{self._constitution}\n\n"
+                f"---\n\n"
+                f"{prompt}"
+            )
 
         session_config = {"working_directory": str(self.local_path)}
         if self.operator_config.model:
