@@ -357,7 +357,7 @@ def main():
         ),
         copilot=CopilotConfig(
             timeout=args.timeout,
-            model=args.model,
+            model=None if args.assess else args.model,
         ),
         pr=PRConfig(
             merge_method=args.merge_method,
