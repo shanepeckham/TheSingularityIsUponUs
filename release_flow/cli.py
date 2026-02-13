@@ -171,15 +171,23 @@ Environment Variables:
     operator_group.add_argument(
         "--operator-model",
         type=str,
-        default="claude-3.5-sonnet",
+        default=None,
         help="Model for the Operator (must differ from --model). "
-             "Default: claude-3.5-sonnet",
+             "Default: claude-3.5-sonnet. In --assess mode, falls back to --model.",
     )
     operator_group.add_argument(
         "--operator-timeout",
         type=int,
         default=300,
         help="Timeout for Operator LLM calls in seconds (default: 300)",
+    )
+    operator_group.add_argument(
+        "--operator-prompts-dir",
+        type=str,
+        default=None,
+        help="Directory containing Operator prompt template files "
+             "(assess.md, roadmap.md, generate_prompts.md, judge.md). "
+             "Defaults to built-in prompts when not set.",
     )
     operator_group.add_argument(
         "--no-operator-judge",
@@ -321,6 +329,17 @@ def main():
     # Enable operator if --assess or --with-operator
     operator_enabled = args.with_operator or args.assess
     
+    # Resolve operator model:
+    # - Explicit --operator-model wins
+    # - In --assess mode, fall back to --model (no agent, so --model is free)
+    # - Otherwise default to claude-3.5-sonnet
+    if args.operator_model:
+        operator_model = args.operator_model
+    elif args.assess and args.model:
+        operator_model = args.model
+    else:
+        operator_model = "claude-3.5-sonnet"
+
     config = ReleaseFlowConfig(
         repo=repo,
         local_path=local_path,
@@ -343,11 +362,12 @@ def main():
         ),
         operator=OperatorConfig(
             enabled=operator_enabled,
-            model=args.operator_model,
+            model=operator_model,
             timeout=args.operator_timeout,
             judge_after_iteration=not args.no_operator_judge,
             generate_prompts_before_run=operator_enabled,
             update_prompts_after_run=operator_enabled,
+            operator_prompts_dir=args.operator_prompts_dir,
             stop_on_fail_verdict=args.stop_on_fail_verdict,
         ),
     )

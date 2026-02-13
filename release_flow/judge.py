@@ -211,10 +211,79 @@ Return your evaluation as structured text.
                 f"Use a different model for independent evaluation."
             )
 
+        # Load prompt templates from files when configured
+        self._load_prompt_templates()
+
         logger.info(
             f"Operator initialised (model: {operator_model or 'default'}, "
-            f"agent model: {agent_model or 'default'})"
-        )
+            f"agent model: {agent_model or 'default'})")
+
+    # ------------------------------------------------------------------ #
+    # Prompt template loading
+    # ------------------------------------------------------------------ #
+
+    _PROMPT_FILE_MAP = {
+        "assess.md": "ASSESS_PROMPT",
+        "roadmap.md": "ROADMAP_PROMPT",
+        "generate_prompts.md": "GENERATE_PROMPTS_PROMPT",
+        "judge.md": "JUDGE_PROMPT",
+    }
+
+    def _load_prompt_templates(self) -> None:
+        """Load prompt templates from the configured directory.
+
+        For each recognised file (assess.md, roadmap.md, generate_prompts.md,
+        judge.md) found in ``operator_prompts_dir``, the corresponding class-
+        level prompt constant is overridden on *this* instance.  Files that
+        are missing are silently skipped and the built-in default is kept.
+        """
+        prompts_dir_setting = self.operator_config.operator_prompts_dir
+        if not prompts_dir_setting:
+            return
+
+        prompts_dir = Path(prompts_dir_setting)
+        if not prompts_dir.is_absolute():
+            prompts_dir = self.local_path / prompts_dir
+        prompts_dir = prompts_dir.resolve()
+
+        if not prompts_dir.is_dir():
+            logger.warning(
+                f"Operator prompts directory not found: {prompts_dir} "
+                f"— using built-in defaults"
+            )
+            return
+
+        # Security: ensure the directory is within the project tree
+        try:
+            prompts_dir.relative_to(self.local_path)
+        except ValueError:
+            raise OperatorError(
+                f"Operator prompts directory must be inside the project: "
+                f"{prompts_dir} is outside {self.local_path}"
+            )
+
+        loaded = 0
+        for filename, attr in self._PROMPT_FILE_MAP.items():
+            filepath = prompts_dir / filename
+            if not filepath.is_file():
+                continue
+            # Security: reject files > 64 KB
+            if filepath.stat().st_size > 65_536:
+                raise OperatorError(
+                    f"Operator prompt file too large (max 64 KB): {filepath}"
+                )
+            content = filepath.read_text(encoding="utf-8").strip()
+            if content:
+                setattr(self, attr, content)
+                loaded += 1
+                logger.info(f"Loaded operator prompt from {filepath}")
+
+        if loaded:
+            print(f"📄 Loaded {loaded} operator prompt(s) from {prompts_dir}")
+        else:
+            logger.info(
+                f"No prompt files found in {prompts_dir} — using built-in defaults"
+            )
 
     # ------------------------------------------------------------------ #
     # Copilot SDK lifecycle

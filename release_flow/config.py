@@ -115,6 +115,11 @@ class OperatorConfig:
     prompts_file: str = "prompts.txt"
     """Path to the prompts file the Operator manages."""
 
+    operator_prompts_dir: Optional[str] = None
+    """Directory containing Operator prompt template files (assess.md,
+    roadmap.md, generate_prompts.md, judge.md). When None, built-in
+    defaults are used."""
+
     stop_on_fail_verdict: bool = False
     """When True, stop the continuous run if the Operator gives a FAIL verdict."""
 
