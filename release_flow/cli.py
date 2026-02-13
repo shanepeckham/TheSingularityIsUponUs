@@ -190,6 +190,14 @@ Environment Variables:
              "Defaults to built-in prompts when not set.",
     )
     operator_group.add_argument(
+        "--constitution",
+        type=str,
+        default=None,
+        help="Path to a constitution file containing first principles "
+             "the Operator must always follow. Prepended to every Operator prompt. "
+             "(e.g., operator_prompts/constitution.md)",
+    )
+    operator_group.add_argument(
         "--no-operator-judge",
         action="store_true",
         help="Disable post-iteration judging by the Operator",
@@ -349,7 +357,7 @@ def main():
         ),
         copilot=CopilotConfig(
             timeout=args.timeout,
-            model=args.model,
+            model=None if args.assess else args.model,
         ),
         pr=PRConfig(
             merge_method=args.merge_method,
@@ -368,6 +376,7 @@ def main():
             generate_prompts_before_run=operator_enabled,
             update_prompts_after_run=operator_enabled,
             operator_prompts_dir=args.operator_prompts_dir,
+            constitution_file=args.constitution,
             stop_on_fail_verdict=args.stop_on_fail_verdict,
         ),
     )
