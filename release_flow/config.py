@@ -128,6 +128,23 @@ class OperatorConfig:
     stop_on_fail_verdict: bool = False
     """When True, stop the continuous run if the Operator gives a FAIL verdict."""
 
+    manage_gitignore: bool = True
+    """When True, automatically add release flow artefacts (prompts.txt,
+    operator_prompts/, etc.) to the target repo's .gitignore so that git
+    stash/reset/pull operations do not overwrite them."""
+
+    gitignore_patterns: list[str] = None  # type: ignore[assignment]
+    """Glob patterns to add to .gitignore. Defaults to common release flow
+    artefacts when None."""
+
+    def __post_init__(self):
+        if self.gitignore_patterns is None:
+            self.gitignore_patterns = [
+                "prompts.txt",
+                "operator_prompts/",
+                "validation_report.txt",
+            ]
+
 
 @dataclass
 class ReleaseFlowConfig:
@@ -235,13 +252,15 @@ class ReleaseFlowConfig:
         if hasattr(self.operator, 'timeout') and self.operator.timeout <= 0:
             raise ValueError("Operator timeout must be positive")
         
-        # Enforce model separation when operator is enabled
+        # Warn (but allow) when operator and agent share the same model
         if self.operator.enabled and self.copilot.model and self.operator.model:
             if self.copilot.model == self.operator.model:
-                raise ValueError(
-                    f"Operator model must differ from agent model. "
-                    f"Both are set to '{self.copilot.model}'. "
-                    f"Use a different model for independent evaluation."
+                import warnings
+                warnings.warn(
+                    f"Operator and agent both use '{self.copilot.model}'. "
+                    f"For independent evaluation consider using a different "
+                    f"--operator-model.",
+                    stacklevel=2,
                 )
 
 

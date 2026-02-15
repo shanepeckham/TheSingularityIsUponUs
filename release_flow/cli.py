@@ -207,6 +207,13 @@ Environment Variables:
         action="store_true",
         help="Stop continuous mode if the Operator gives a FAIL verdict",
     )
+    operator_group.add_argument(
+        "--no-manage-gitignore",
+        action="store_true",
+        help="Don't auto-add release flow artefacts to .gitignore. "
+             "By default, prompts.txt and operator_prompts/ are added "
+             "to .gitignore so git operations don't overwrite them.",
+    )
     
     parser.add_argument(
         "--version", "-v",
@@ -339,11 +346,11 @@ def main():
     
     # Resolve operator model:
     # - Explicit --operator-model wins
-    # - In --assess mode, fall back to --model (no agent, so --model is free)
-    # - Otherwise default to claude-3.5-sonnet
+    # - Otherwise fall back to --model (same model for both)
+    # - Last resort: claude-3.5-sonnet
     if args.operator_model:
         operator_model = args.operator_model
-    elif args.assess and args.model:
+    elif args.model:
         operator_model = args.model
     else:
         operator_model = "claude-3.5-sonnet"
@@ -378,6 +385,7 @@ def main():
             operator_prompts_dir=args.operator_prompts_dir,
             constitution_file=args.constitution,
             stop_on_fail_verdict=args.stop_on_fail_verdict,
+            manage_gitignore=not args.no_manage_gitignore,
         ),
     )
     
