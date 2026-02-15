@@ -1050,7 +1050,14 @@ Run ID: {self.run_id}
         results = []
         
         # --- Operator pre-run: assess codebase and generate prompts ---
-        if self.operator and self.config.operator.generate_prompts_before_run:
+        # Skip when prompts are already loaded (e.g. from a prior --assess run).
+        # This prevents overwriting operator-generated prompts.txt when the
+        # agent is run with --with-operator after a separate --assess step.
+        if (
+            self.operator
+            and self.config.operator.generate_prompts_before_run
+            and not prompts
+        ):
             try:
                 print("\n" + "=" * 60)
                 print("🔍 OPERATOR PRE-RUN ASSESSMENT")
@@ -1065,6 +1072,8 @@ Run ID: {self.run_id}
             except Exception as e:
                 logger.warning(f"Operator pre-run assessment failed: {e}")
                 print(f"⚠️  Operator assessment failed, using existing prompts: {e}")
+        elif self.operator and prompts:
+            print(f"📋 Using {len(prompts)} existing prompts (skipping operator re-assessment)")
         
         for iteration in range(max_iterations):
             prompt = prompts[iteration % len(prompts)]
