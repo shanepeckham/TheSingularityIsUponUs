@@ -201,14 +201,16 @@ Return your evaluation as structured text.
         self.local_path = Path(config.local_path).resolve()
         self.copilot_client = None
 
-        # Enforce model separation
+        # Warn (but allow) when operator and agent share the same model
         agent_model = config.copilot.model
         operator_model = self.operator_config.model
         if agent_model and operator_model and agent_model == operator_model:
-            raise OperatorError(
-                f"Operator model must differ from agent model. "
-                f"Both are set to '{agent_model}'. "
-                f"Use a different model for independent evaluation."
+            import warnings
+            warnings.warn(
+                f"Operator and agent both use '{agent_model}'. "
+                f"For independent evaluation consider using a different "
+                f"--operator-model.",
+                stacklevel=2,
             )
 
         # Load prompt templates from files when configured

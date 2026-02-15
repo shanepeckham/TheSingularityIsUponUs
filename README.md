@@ -113,13 +113,29 @@ a fresh perspective and catches issues the first misses.
 
 ### Quick start with the Operator
 
+The recommended workflow is a **two-step process**: run the Operator first to
+generate prompts, review them, then run the agent separately.
+
 ```bash
-# Step 1: Run the Operator to assess the codebase and generate prompts.txt
+# Step 1: Operator assesses the codebase and writes prompts.txt
 uv run python -m release_flow --assess
 
-# Step 2: Run the agent with the Operator judging each iteration
-uv run python -m release_flow --continuous --with-operator --auto-merge
+# Step 2: Review prompts.txt, then run the agent with the Operator judging
+uv run python -m release_flow --continuous --with-operator
 ```
+
+**Why two steps?** This gives you a chance to review and edit the operator-generated
+prompts before the agent acts on them. When `--with-operator` is used and
+`prompts.txt` already exists (from step 1), the agent **will not overwrite it** —
+it uses the existing prompts and skips operator re-assessment.  If you want the
+operator to regenerate prompts from scratch, delete `prompts.txt` first.
+
+| Scenario | Prompts overwritten? |
+|---|---|
+| `--assess` | Yes — this is the Operator writing prompts.txt |
+| `--continuous` (no operator) | No — reads existing prompts.txt |
+| `--continuous --with-operator` (prompts.txt exists) | **No** — uses existing prompts, Operator only judges |
+| `--continuous --with-operator` (no prompts.txt) | Yes — Operator runs assessment + generates prompts |
 
 By default the Operator uses `claude-3.5-sonnet` and the agent uses whatever
 `--model` you provide. You can override both:
@@ -218,6 +234,53 @@ provided in `operator_prompts/constitution.md` covering:
 - Continuous improvement — learn from previous iterations
 
 Edit this file to encode your team's own engineering principles.
+
+### Embedding in another repository
+
+When you embed Release Flow into a target repository, operator-generated files
+(`prompts.txt`, `operator_prompts/`, `validation_report.txt`) should not be
+tracked by Git. Otherwise, `git stash`, `git reset --hard`, and `git pull` will
+overwrite or discard them during the agent's `ensure_clean_state()` step.
+
+**By default, Release Flow automatically adds these patterns to the target repo's
+`.gitignore`** when the Operator is enabled. You'll see a message like:
+
+```
+📝 Updated .gitignore with 3 release flow pattern(s)
+```
+
+The following entries are added:
+
+```gitignore
+# Release Flow artefacts (auto-managed)
+prompts.txt
+operator_prompts/
+validation_report.txt
+```
+
+To disable this behaviour:
+
+```bash
+uv run python -m release_flow --continuous --with-operator --no-manage-gitignore
+```
+
+Or in Python:
+
+```python
+OperatorConfig(
+    enabled=True,
+    manage_gitignore=False,         # don't touch .gitignore
+)
+```
+
+You can also customise which patterns are added:
+
+```python
+OperatorConfig(
+    enabled=True,
+    gitignore_patterns=["prompts.txt", "operator_prompts/", "my_custom_dir/"],
+)
+```
 
 ### Operator CLI options
 
@@ -345,6 +408,8 @@ config = ReleaseFlowConfig(
         operator_prompts_dir="operator_prompts",  # custom prompt templates
         constitution_file="operator_prompts/constitution.md",  # first principles
         stop_on_fail_verdict=False,
+        manage_gitignore=True,               # auto-add artefacts to .gitignore
+        gitignore_patterns=["prompts.txt", "operator_prompts/", "validation_report.txt"],
     ),
 )
 ```
@@ -410,6 +475,7 @@ Operator Options (all optional):
   --constitution         First-principles file prepended to every Operator prompt
   --no-operator-judge  Disable post-iteration judging
   --stop-on-fail-verdict  Stop if Operator gives FAIL verdict
+  --no-manage-gitignore   Don't auto-add release flow artefacts to .gitignore
 
 Environment Variables:
   GITHUB_TOKEN         GitHub personal access token (or use 'gh auth login')
