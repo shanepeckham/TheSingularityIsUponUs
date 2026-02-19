@@ -156,6 +156,34 @@ Environment Variables:
         help="Stop continuous mode if an iteration fails",
     )
     
+    # --- Logging options ---
+    log_group = parser.add_argument_group(
+        "Logging options",
+        "Control verbosity and logging output.",
+    )
+    log_group.add_argument(
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase logging verbosity. Use once for INFO, twice for DEBUG.",
+    )
+    log_group.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable DEBUG logging (shorthand for --verbose --verbose)",
+    )
+    log_group.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Write detailed (DEBUG-level) logs to the specified file",
+    )
+    log_group.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress log output below ERROR on the console",
+    )
+    
     # --- Operator (LLM-as-judge / product owner) options ---
     operator_group = parser.add_argument_group(
         "Operator options",
@@ -279,6 +307,22 @@ def main():
     """Main entry point."""
     parser = create_parser()
     args = parser.parse_args()
+    
+    # --- Configure logging early, before any other imports that log ---
+    import sys as _sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from utils import setup_logging
+    
+    verbosity = max(args.verbose, 2 if args.debug else 0)
+    setup_logging(
+        verbosity=verbosity,
+        log_file=args.log_file,
+        quiet=args.quiet,
+    )
+    
+    import logging as _logging
+    _cli_logger = _logging.getLogger("release_flow.cli")
+    _cli_logger.info("Release Flow CLI starting (verbosity=%d)", verbosity)
     
     # Import here to avoid circular imports
     from .config import (
