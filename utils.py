@@ -2,16 +2,81 @@
 Utility functions for the Release Flow framework.
 
 This module provides helper functions for retry logic, rate limiting,
-and other common operations.
+logging setup, and other common operations.
 """
 
 import asyncio
 import logging
+import sys
 import time
 from functools import wraps
+from pathlib import Path
 from typing import Callable, TypeVar, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Package-level logger name used across all modules
+PACKAGE_LOGGER = "release_flow"
+
+
+def setup_logging(
+    *,
+    verbosity: int = 0,
+    log_file: Optional[str] = None,
+    quiet: bool = False,
+) -> None:
+    """Configure logging for the Release Flow framework.
+
+    Call this once from the CLI entry point. Library code should never call
+    ``logging.basicConfig()`` directly.
+
+    Args:
+        verbosity: 0 = WARNING (default), 1 = INFO (``--verbose``),
+                   2+ = DEBUG (``--debug``).
+        log_file: Optional path to a log file. File always receives DEBUG
+                  level regardless of console verbosity.
+        quiet: When True, suppress console output below ERROR.
+    """
+    # Determine console log level
+    if quiet:
+        console_level = logging.ERROR
+    elif verbosity >= 2:
+        console_level = logging.DEBUG
+    elif verbosity >= 1:
+        console_level = logging.INFO
+    else:
+        console_level = logging.WARNING
+
+    # Root package logger
+    pkg_logger = logging.getLogger(PACKAGE_LOGGER)
+    pkg_logger.setLevel(logging.DEBUG)  # handlers decide what to show
+    pkg_logger.handlers.clear()
+
+    # Console handler
+    console_fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(console_level)
+    console_handler.setFormatter(console_fmt)
+    pkg_logger.addHandler(console_handler)
+
+    # File handler (always DEBUG)
+    if log_file:
+        file_fmt = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
+        )
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(file_fmt)
+        pkg_logger.addHandler(file_handler)
+
+    pkg_logger.debug(
+        "Logging configured: console=%s, file=%s",
+        logging.getLevelName(console_level),
+        log_file or "none",
+    )
 
 T = TypeVar('T')
 

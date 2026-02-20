@@ -221,8 +221,11 @@ Return your evaluation as structured text.
         self._load_constitution()
 
         logger.info(
-            f"Operator initialised (model: {operator_model or 'default'}, "
-            f"agent model: {agent_model or 'default'})")
+            "Operator initialised (operator_model=%s, agent_model=%s, constitution=%s)",
+            operator_model or 'default',
+            agent_model or 'default',
+            bool(self._constitution),
+        )
 
     # ------------------------------------------------------------------ #
     # Prompt template loading
@@ -372,6 +375,7 @@ Return your evaluation as structured text.
 
         # Prepend constitution when available
         if self._constitution:
+            logger.debug("Prepending constitution (%d chars) to prompt", len(self._constitution))
             prompt = (
                 f"{self._constitution}\n\n"
                 f"---\n\n"
@@ -382,6 +386,9 @@ Return your evaluation as structured text.
         if self.operator_config.model:
             session_config["model"] = self.operator_config.model
 
+        logger.debug("Sending prompt to Operator LLM (model=%s, prompt_len=%d)",
+                     self.operator_config.model or 'default', len(prompt))
+
         try:
             session = await self.copilot_client.create_session(session_config)
             response = await session.send_and_wait(
@@ -390,13 +397,20 @@ Return your evaluation as structured text.
             )
             await session.destroy()
 
+            result_text = ""
             if response and hasattr(response, "data"):
                 if hasattr(response.data, "content"):
-                    return response.data.content
-                return str(response.data)
-            return str(response) if response else ""
+                    result_text = response.data.content
+                else:
+                    result_text = str(response.data)
+            else:
+                result_text = str(response) if response else ""
+
+            logger.debug("Operator LLM response received (%d chars)", len(result_text))
+            return result_text
 
         except Exception as e:
+            logger.error("Operator LLM call failed: %s", e, exc_info=True)
             raise OperatorError(f"Operator LLM call failed: {e}") from e
 
     # ------------------------------------------------------------------ #
@@ -417,7 +431,8 @@ Return your evaluation as structured text.
         assessment = await self._send_prompt(prompt)
 
         print("📋 Assessment complete")
-        logger.info(f"Assessment length: {len(assessment)} chars")
+        logger.info("Assessment complete (%d chars)", len(assessment))
+        logger.debug("Assessment content (first 500 chars): %s", assessment[:500])
         return assessment
 
     async def define_roadmap(self, assessment: str) -> str:
@@ -439,7 +454,8 @@ Return your evaluation as structured text.
         roadmap = await self._send_prompt(prompt)
 
         print("📋 Roadmap defined")
-        logger.info(f"Roadmap length: {len(roadmap)} chars")
+        logger.info("Roadmap defined (%d chars)", len(roadmap))
+        logger.debug("Roadmap content (first 500 chars): %s", roadmap[:500])
         return roadmap
 
     async def generate_prompts(self, roadmap: str) -> list[str]:
@@ -465,6 +481,9 @@ Return your evaluation as structured text.
         ]
 
         print(f"✅ Generated {len(prompts)} prompts for the agent")
+        logger.info("Generated %d prompts for the agent", len(prompts))
+        for i, p in enumerate(prompts):
+            logger.debug("  Prompt[%d]: %s", i, p[:120])
         return prompts
 
     async def judge_changes(
@@ -521,6 +540,8 @@ Return your evaluation as structured text.
 
         icon = {"PASS": "✅", "FAIL": "❌", "NEEDS_WORK": "🔧"}.get(verdict, "❓")
         print(f"{icon} Verdict: {verdict}")
+        logger.info("Judge verdict=%s, follow_up=%d items", verdict, len(follow_up))
+        logger.debug("Full evaluation:\n%s", evaluation)
 
         if follow_up:
             print(f"   Follow-up items: {len(follow_up)}")
@@ -573,7 +594,7 @@ Return your evaluation as structured text.
 
         action = "Appended to" if append else "Wrote"
         print(f"📝 {action} {len(prompts)} prompts → {target.name}")
-        logger.info(f"{action} {len(prompts)} prompts to {target}")
+        logger.info("%s %d prompts to %s", action, len(prompts), target)
         return target
 
     # ------------------------------------------------------------------ #
@@ -590,6 +611,7 @@ Return your evaluation as structured text.
         Returns:
             Dict with assessment, roadmap, prompts, and prompts_file path.
         """
+        logger.info("Starting full Operator assessment pipeline (update_prompts=%s)", update_prompts)
         try:
             assessment = await self.assess_codebase()
             roadmap = await self.define_roadmap(assessment)
@@ -605,6 +627,9 @@ Return your evaluation as structured text.
                 "prompts": prompts,
                 "prompts_file": str(prompts_file) if prompts_file else None,
             }
+        except Exception:
+            logger.error("Full assessment pipeline failed", exc_info=True)
+            raise
         finally:
             await self._close_copilot()
 
