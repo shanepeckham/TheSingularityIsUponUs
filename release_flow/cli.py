@@ -156,34 +156,6 @@ Environment Variables:
         help="Stop continuous mode if an iteration fails",
     )
     
-    # --- Logging options ---
-    log_group = parser.add_argument_group(
-        "Logging options",
-        "Control verbosity and logging output.",
-    )
-    log_group.add_argument(
-        "--verbose",
-        action="count",
-        default=0,
-        help="Increase logging verbosity. Use once for INFO, twice for DEBUG.",
-    )
-    log_group.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable DEBUG logging (shorthand for --verbose --verbose)",
-    )
-    log_group.add_argument(
-        "--log-file",
-        type=str,
-        default=None,
-        help="Write detailed (DEBUG-level) logs to the specified file",
-    )
-    log_group.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        help="Suppress log output below ERROR on the console",
-    )
-    
     # --- Operator (LLM-as-judge / product owner) options ---
     operator_group = parser.add_argument_group(
         "Operator options",
@@ -206,8 +178,8 @@ Environment Variables:
     operator_group.add_argument(
         "--operator-timeout",
         type=int,
-        default=300,
-        help="Timeout for Operator LLM calls in seconds (default: 300)",
+        default=None,
+        help="Timeout for Operator LLM calls in seconds (defaults to --timeout value)",
     )
     operator_group.add_argument(
         "--operator-prompts-dir",
@@ -399,6 +371,9 @@ def main():
     else:
         operator_model = "claude-3.5-sonnet"
 
+    # If --operator-timeout wasn't explicitly set, fall back to --timeout
+    operator_timeout = args.operator_timeout if args.operator_timeout is not None else args.timeout
+
     config = ReleaseFlowConfig(
         repo=repo,
         local_path=local_path,
@@ -422,7 +397,7 @@ def main():
         operator=OperatorConfig(
             enabled=operator_enabled,
             model=operator_model,
-            timeout=args.operator_timeout,
+            timeout=operator_timeout,
             judge_after_iteration=not args.no_operator_judge,
             generate_prompts_before_run=operator_enabled,
             update_prompts_after_run=operator_enabled,
