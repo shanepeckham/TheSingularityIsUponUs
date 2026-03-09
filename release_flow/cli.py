@@ -280,6 +280,22 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
     
+    # --- Configure logging early, before any other imports that log ---
+    from ..utils import setup_logging
+    
+    
+    
+    verbosity = max(args.verbose, 2 if args.debug else 0)
+    setup_logging(
+        verbosity=verbosity,
+        log_file=args.log_file,
+        quiet=args.quiet,
+    )
+    
+    import logging as _logging
+    _cli_logger = _logging.getLogger("release_flow.cli")
+    _cli_logger.info("Release Flow CLI starting (verbosity=%d)", verbosity)
+    
     # Import here to avoid circular imports
     from .config import (
         ReleaseFlowConfig,
